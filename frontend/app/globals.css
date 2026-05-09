@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Base resets on top of Tailwind's preflight */
+html,
+body {
+  height: 100%;
+}
