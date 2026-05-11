@@ -8,6 +8,8 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 
 	"github.com/constantine950/ChatFlow/internal/auth"
+	"github.com/constantine950/ChatFlow/internal/channel"
+	"github.com/constantine950/ChatFlow/internal/workspace"
 	"github.com/constantine950/ChatFlow/pkg/cache"
 	"github.com/constantine950/ChatFlow/pkg/config"
 	"github.com/constantine950/ChatFlow/pkg/database"
@@ -17,7 +19,7 @@ func main() {
 	// Config
 	cfg := config.Load()
 
-	//Database
+	// Database
 	db, err := database.Connect(cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("database: failed to connect: %v", err)
@@ -33,12 +35,20 @@ func main() {
 	defer redisClient.Close()
 	log.Println("redis: connected")
 
-	// Auth
+	// Wire up layers
 	authRepo    := auth.NewRepository(db)
 	authService := auth.NewService(authRepo, redisClient, cfg.JWTSecret)
 	authHandler := auth.NewHandler(authService)
 
-	// Fiber
+	wsRepo     := workspace.NewRepository(db)
+	wsService  := workspace.NewService(wsRepo)
+	wsHandler  := workspace.NewHandler(wsService)
+
+	chRepo     := channel.NewRepository(db)
+	chService  := channel.NewService(chRepo)
+	chHandler  := channel.NewHandler(chService)
+
+	// Fiber app
 	app := fiber.New(fiber.Config{
 		AppName: "ChatFlow API v1",
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
@@ -55,7 +65,7 @@ func main() {
 	app.Use(recover.New())
 	app.Use(logger.New())
 
-	//Routes
+	// Routes
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok", "service": "chatflow-api"})
 	})
@@ -65,9 +75,20 @@ func main() {
 	// Public
 	authHandler.RegisterRoutes(api.Group("/auth"))
 
-	// Protected (middleware added per group from Day 5 onwards)
-	// TODO Day 5: workspace + channel routes
-	// TODO Day 6: WebSocket endpoint
+	// Protected — all routes below require a valid JWT
+	protected := api.Group("/", authService.Middleware())
+
+	// Workspaces
+	wsHandler.RegisterRoutes(protected.Group("/workspaces"))
+
+	// Channels — two mount points
+	chHandler.RegisterRoutes(
+		protected.Group("/workspaces/:wsID/channels"),
+		protected.Group("/channels"),
+	)
+
+	// TODO Day 6:  WebSocket endpoint
+	// TODO Day 8:  Message routes
 
 	// Start
 	log.Printf("ChatFlow API starting on :%s\n", cfg.Port)
