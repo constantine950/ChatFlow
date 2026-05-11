@@ -6,9 +6,11 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
+	fiberws "github.com/gofiber/websocket/v2"
 
 	"github.com/constantine950/ChatFlow/internal/auth"
 	"github.com/constantine950/ChatFlow/internal/channel"
+	ws "github.com/constantine950/ChatFlow/internal/websocket"
 	"github.com/constantine950/ChatFlow/internal/workspace"
 	"github.com/constantine950/ChatFlow/pkg/cache"
 	"github.com/constantine950/ChatFlow/pkg/config"
@@ -16,10 +18,10 @@ import (
 )
 
 func main() {
-	// Config
+	// ── Config ────────────────────────────────────────────────
 	cfg := config.Load()
 
-	// Database
+	// ── Database ──────────────────────────────────────────────
 	db, err := database.Connect(cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("database: failed to connect: %v", err)
@@ -27,7 +29,7 @@ func main() {
 	defer db.Close()
 	log.Println("database: connected")
 
-	// Redis
+	// ── Redis ─────────────────────────────────────────────────
 	redisClient, err := cache.Connect(cfg.RedisURL)
 	if err != nil {
 		log.Fatalf("redis: failed to connect: %v", err)
@@ -35,20 +37,24 @@ func main() {
 	defer redisClient.Close()
 	log.Println("redis: connected")
 
-	// Wire up layers
+	// ── WebSocket hub ─────────────────────────────────────────
+	hub := ws.NewHub()
+	go hub.Run()
+
+	// ── Wire up layers ────────────────────────────────────────
 	authRepo    := auth.NewRepository(db)
 	authService := auth.NewService(authRepo, redisClient, cfg.JWTSecret)
 	authHandler := auth.NewHandler(authService)
 
-	wsRepo     := workspace.NewRepository(db)
-	wsService  := workspace.NewService(wsRepo)
-	wsHandler  := workspace.NewHandler(wsService)
+	wsRepo    := workspace.NewRepository(db)
+	wsService := workspace.NewService(wsRepo)
+	wsHandler := workspace.NewHandler(wsService)
 
-	chRepo     := channel.NewRepository(db)
-	chService  := channel.NewService(chRepo)
-	chHandler  := channel.NewHandler(chService)
+	chRepo    := channel.NewRepository(db)
+	chService := channel.NewService(chRepo)
+	chHandler := channel.NewHandler(chService)
 
-	// Fiber app
+	// ── Fiber app ─────────────────────────────────────────────
 	app := fiber.New(fiber.Config{
 		AppName: "ChatFlow API v1",
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
@@ -65,32 +71,39 @@ func main() {
 	app.Use(recover.New())
 	app.Use(logger.New())
 
-	// Routes
+	// ── Routes ────────────────────────────────────────────────
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok", "service": "chatflow-api"})
 	})
+
+	// WebSocket upgrade — token passed as query param
+	// e.g. ws://localhost:8080/ws?token=<access_token>
+	app.Use("/ws", func(c *fiber.Ctx) error {
+		if fiberws.IsWebSocketUpgrade(c) {
+			return c.Next()
+		}
+		return fiber.ErrUpgradeRequired
+	})
+	app.Get("/ws", fiberws.New(hub.Handler(authService)))
 
 	api := app.Group("/api/v1")
 
 	// Public
 	authHandler.RegisterRoutes(api.Group("/auth"))
 
-	// Protected — all routes below require a valid JWT
+	// Protected
 	protected := api.Group("/", authService.Middleware())
 
-	// Workspaces
 	wsHandler.RegisterRoutes(protected.Group("/workspaces"))
 
-	// Channels — two mount points
 	chHandler.RegisterRoutes(
 		protected.Group("/workspaces/:wsID/channels"),
 		protected.Group("/channels"),
 	)
 
-	// TODO Day 6:  WebSocket endpoint
-	// TODO Day 8:  Message routes
+	// TODO Day 8: message routes
 
-	// Start
+	// ── Start ─────────────────────────────────────────────────
 	log.Printf("ChatFlow API starting on :%s\n", cfg.Port)
 	log.Fatal(app.Listen(":" + cfg.Port))
 }
