@@ -2,51 +2,74 @@ package main
 
 import (
 	"log"
-	"os"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
-	"github.com/joho/godotenv"
+
+	"github.com/constantine950/ChatFlow/internal/auth"
+	"github.com/constantine950/ChatFlow/pkg/cache"
+	"github.com/constantine950/ChatFlow/pkg/config"
+	"github.com/constantine950/ChatFlow/pkg/database"
 )
 
 func main() {
-	// Load .env file in development
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, reading from environment")
-	}
+	// Config
+	cfg := config.Load()
 
-	// Create Fiber app
+	//Database
+	db, err := database.Connect(cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("database: failed to connect: %v", err)
+	}
+	defer db.Close()
+	log.Println("database: connected")
+
+	// Redis
+	redisClient, err := cache.Connect(cfg.RedisURL)
+	if err != nil {
+		log.Fatalf("redis: failed to connect: %v", err)
+	}
+	defer redisClient.Close()
+	log.Println("redis: connected")
+
+	// Auth
+	authRepo    := auth.NewRepository(db)
+	authService := auth.NewService(authRepo, redisClient, cfg.JWTSecret)
+	authHandler := auth.NewHandler(authService)
+
+	// Fiber
 	app := fiber.New(fiber.Config{
 		AppName: "ChatFlow API v1",
+		ErrorHandler: func(c *fiber.Ctx, err error) error {
+			code := fiber.StatusInternalServerError
+			msg  := "internal server error"
+			if e, ok := err.(*fiber.Error); ok {
+				code = e.Code
+				msg  = e.Message
+			}
+			return c.Status(code).JSON(fiber.Map{"error": msg})
+		},
 	})
 
-	// Global middleware
 	app.Use(recover.New())
 	app.Use(logger.New())
 
-	// Health check — used by Docker and load balancers
+	//Routes
 	app.Get("/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{
-			"status":  "ok",
-			"service": "chatflow-api",
-		})
+		return c.JSON(fiber.Map{"status": "ok", "service": "chatflow-api"})
 	})
 
-	// API v1 group — routes will be registered here day by day
 	api := app.Group("/api/v1")
-	_ = api // silence unused warning until Day 4
 
-	// TODO Day 4:  register auth routes
-	// TODO Day 5:  register workspace + channel routes
-	// TODO Day 6:  register WebSocket endpoint
-	// TODO Day 8+: register message routes
+	// Public
+	authHandler.RegisterRoutes(api.Group("/auth"))
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
+	// Protected (middleware added per group from Day 5 onwards)
+	// TODO Day 5: workspace + channel routes
+	// TODO Day 6: WebSocket endpoint
 
-	log.Printf("ChatFlow API starting on :%s\n", port)
-	log.Fatal(app.Listen(":" + port))
+	// Start
+	log.Printf("ChatFlow API starting on :%s\n", cfg.Port)
+	log.Fatal(app.Listen(":" + cfg.Port))
 }

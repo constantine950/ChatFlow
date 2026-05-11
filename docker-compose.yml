@@ -27,7 +27,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chatflow_secret}
       POSTGRES_DB: ${POSTGRES_DB:-chatflow}
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -150,7 +150,7 @@ services:
   #     redpanda:  { condition: service_healthy }
   #     minio:     { condition: service_healthy }
   #   environment:
-  #     DATABASE_URL: postgres://${POSTGRES_USER:-chatflow}:${POSTGRES_PASSWORD:-chatflow_secret}@postgres:5432/${POSTGRES_DB:-chatflow}?sslmode=disable
+  #     DATABASE_URL: postgres://${POSTGRES_USER:-chatflow}:${POSTGRES_PASSWORD:-chatflow_secret}@postgres:5433/${POSTGRES_DB:-chatflow}?sslmode=disable
   #     REDIS_URL:    redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
   #     KAFKA_BROKERS: redpanda:9092
   #     MINIO_ENDPOINT: minio:9000
