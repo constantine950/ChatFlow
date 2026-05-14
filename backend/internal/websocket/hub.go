@@ -1,35 +1,40 @@
 package websocket
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/constantine950/ChatFlow/internal/auth"
+	"github.com/constantine950/ChatFlow/internal/kafka"
 	fiberws "github.com/gofiber/websocket/v2"
+	"github.com/google/uuid"
 )
 
 // Hub maintains the set of active clients and routes events between them.
-// There is one Hub for the entire server — it's safe for concurrent use.
 type Hub struct {
-	mu      sync.RWMutex
-	clients map[*Client]bool // all connected clients
+	mu       sync.RWMutex
+	clients  map[*Client]bool
 
-	// Channels for client lifecycle management
 	register   chan *Client
 	unregister chan *Client
+
+	// Kafka producer — injected at startup
+	producer *kafka.Producer
 }
 
-// NewHub creates a Hub. Call Run() in a goroutine after creating it.
-func NewHub() *Hub {
+func NewHub(producer *kafka.Producer) *Hub {
 	return &Hub{
 		clients:    make(map[*Client]bool),
 		register:   make(chan *Client, 64),
 		unregister: make(chan *Client, 64),
+		producer:   producer,
 	}
 }
 
-// Run starts the hub's event loop. Must be called in its own goroutine.
 func (h *Hub) Run() {
 	for {
 		select {
@@ -52,6 +57,7 @@ func (h *Hub) Run() {
 }
 
 // BroadcastToChannel sends an event to every client subscribed to channelID.
+// Called by the Kafka consumer after a message is written to Postgres.
 func (h *Hub) BroadcastToChannel(channelID string, event Event) {
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -67,7 +73,6 @@ func (h *Hub) BroadcastToChannel(channelID string, event Event) {
 			select {
 			case client.send <- data:
 			default:
-				// Client's buffer full — will be cleaned up by WritePump
 			}
 		}
 	}
@@ -94,11 +99,8 @@ func (h *Hub) SendToUser(userID string, event Event) {
 }
 
 // Handler returns the Fiber WebSocket upgrade handler.
-// Mount it at GET /ws with auth middleware applied before it.
 func (h *Hub) Handler(authService *auth.Service) func(*fiberws.Conn) {
 	return func(conn *fiberws.Conn) {
-		// Extract claims from the query param token
-		// (browsers can't set Authorization headers on WS connections)
 		tokenStr := conn.Query("token")
 		if tokenStr == "" {
 			conn.Close()
@@ -114,13 +116,12 @@ func (h *Hub) Handler(authService *auth.Service) func(*fiberws.Conn) {
 		client := newClient(h, conn, claims.UserID, claims.DisplayName)
 		h.register <- client
 
-		// Run write pump in background, read pump blocks this goroutine
 		go client.WritePump()
 		client.ReadPump()
 	}
 }
 
-// handleEvent routes an inbound client event to the right action.
+// handleEvent routes inbound client events.
 func (h *Hub) handleEvent(c *Client, event Event) {
 	switch event.Type {
 
@@ -142,8 +143,7 @@ func (h *Hub) handleEvent(c *Client, event Event) {
 		c.UnsubscribeFrom(payload.ChannelID)
 
 	case EventPresenceHeartbeat:
-		// Will be wired to Redis presence on Day 9
-		// For now just acknowledge it silently
+		// Wired to Redis on Day 9
 		log.Printf("ws: heartbeat from user=%s", c.UserID)
 
 	case EventTypingStart, EventTypingStop:
@@ -152,8 +152,7 @@ func (h *Hub) handleEvent(c *Client, event Event) {
 			c.sendError("invalid_payload", "typing event requires channel_id")
 			return
 		}
-		// Broadcast typing indicator to other subscribers
-		// (Redis pub/sub wired on Day 10 — for now direct broadcast)
+		// Redis pub/sub wired on Day 10 — direct broadcast for now
 		h.BroadcastToChannel(payload.ChannelID, Event{
 			Type: EventTypingIndicator,
 			Payload: TypingIndicatorPayload{
@@ -164,8 +163,6 @@ func (h *Hub) handleEvent(c *Client, event Event) {
 		})
 
 	case EventMessageSend:
-		// Will be routed through Kafka on Day 8.
-		// For now: direct broadcast so Day 6 demo works.
 		payload, ok := parsePayload[MessageSendPayload](event.Payload)
 		if !ok {
 			c.sendError("invalid_payload", "message.send requires channel_id and content")
@@ -175,28 +172,39 @@ func (h *Hub) handleEvent(c *Client, event Event) {
 			c.sendError("validation_error", "content cannot be empty")
 			return
 		}
+		if payload.ChannelID == "" {
+			c.sendError("validation_error", "channel_id is required")
+			return
+		}
 
-		h.BroadcastToChannel(payload.ChannelID, Event{
-			Type: EventMessageNew,
-			Payload: MessageNewPayload{
-				ChannelID:   payload.ChannelID,
-				UserID:      c.UserID,
-				DisplayName: c.DisplayName,
-				Content:     payload.Content,
-			},
-		})
+		// Produce to Kafka. Consumer writes to Postgres then broadcasts.
+		msg := kafka.ChatMessage{
+			ID:              uuid.New().String(),
+			ChannelID:       payload.ChannelID,
+			UserID:          c.UserID,
+			DisplayName:     c.DisplayName,
+			Content:         payload.Content,
+			ParentMessageID: payload.ParentMessageID,
+			SentAt:          time.Now().UTC().Format(time.RFC3339),
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := h.producer.Publish(ctx, msg); err != nil {
+			log.Printf("ws: failed to produce message: %v", err)
+			c.sendError("server_error", "failed to send message, please retry")
+		}
 
 	default:
-		c.sendError("unknown_event", "unknown event type: "+event.Type)
+		c.sendError("unknown_event", fmt.Sprintf("unknown event type: %s", event.Type))
 	}
 }
 
-// count returns the number of connected clients (for logging).
 func (h *Hub) count() int {
 	return len(h.clients)
 }
 
-// parsePayload re-marshals the generic interface{} payload into a typed struct.
 func parsePayload[T any](raw interface{}) (T, bool) {
 	var result T
 	data, err := json.Marshal(raw)

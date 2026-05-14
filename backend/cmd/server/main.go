@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"log"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
@@ -10,6 +12,8 @@ import (
 
 	"github.com/constantine950/ChatFlow/internal/auth"
 	"github.com/constantine950/ChatFlow/internal/channel"
+	"github.com/constantine950/ChatFlow/internal/kafka"
+	"github.com/constantine950/ChatFlow/internal/message"
 	ws "github.com/constantine950/ChatFlow/internal/websocket"
 	"github.com/constantine950/ChatFlow/internal/workspace"
 	"github.com/constantine950/ChatFlow/pkg/cache"
@@ -37,11 +41,18 @@ func main() {
 	defer redisClient.Close()
 	log.Println("redis: connected")
 
-	// ── WebSocket hub ─────────────────────────────────────────
-	hub := ws.NewHub()
-	go hub.Run()
+	// ── Kafka ─────────────────────────────────────────────────
+	brokers := strings.Split(cfg.KafkaBrokers, ",")
 
-	// ── Wire up layers ────────────────────────────────────────
+	if err := kafka.EnsureTopics(brokers); err != nil {
+		log.Printf("kafka: could not ensure topics: %v", err)
+	}
+
+	producer := kafka.NewProducer(brokers)
+	defer producer.Close()
+	log.Println("kafka: producer ready")
+
+	// ── Repositories ──────────────────────────────────────────
 	authRepo    := auth.NewRepository(db)
 	authService := auth.NewService(authRepo, redisClient, cfg.JWTSecret)
 	authHandler := auth.NewHandler(authService)
@@ -53,6 +64,54 @@ func main() {
 	chRepo    := channel.NewRepository(db)
 	chService := channel.NewService(chRepo)
 	chHandler := channel.NewHandler(chService)
+
+	msgRepo := message.NewRepository(db)
+
+	// ── WebSocket hub ─────────────────────────────────────────
+	hub := ws.NewHub(producer)
+	go hub.Run()
+
+	// ── Kafka consumer ────────────────────────────────────────
+	// Handler: write confirmed message to Postgres, then broadcast via WS hub
+	consumer := kafka.NewConsumer(brokers, func(ctx context.Context, msg kafka.ChatMessage) error {
+		var parentID *string
+		if msg.ParentMessageID != "" {
+			parentID = &msg.ParentMessageID
+		}
+
+		saved, err := msgRepo.Insert(ctx, message.InsertParams{
+			ID:              msg.ID,
+			ChannelID:       msg.ChannelID,
+			UserID:          msg.UserID,
+			ParentMessageID: parentID,
+			Content:         msg.Content,
+		})
+		if err != nil {
+			return err
+		}
+
+		// Broadcast the DB-confirmed message to all channel subscribers
+		hub.BroadcastToChannel(saved.ChannelID, ws.Event{
+			Type: ws.EventMessageNew,
+			Payload: ws.MessageNewPayload{
+				ID:          saved.ID,
+				ChannelID:   saved.ChannelID,
+				UserID:      saved.UserID,
+				DisplayName: msg.DisplayName,
+				Content:     saved.Content,
+				CreatedAt:   saved.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			},
+		})
+
+		return nil
+	})
+
+	// Run consumer in background
+	consumerCtx, cancelConsumer := context.WithCancel(context.Background())
+	defer cancelConsumer()
+	go consumer.Run(consumerCtx)
+	defer consumer.Close()
+	log.Println("kafka: consumer started")
 
 	// ── Fiber app ─────────────────────────────────────────────
 	app := fiber.New(fiber.Config{
@@ -76,8 +135,7 @@ func main() {
 		return c.JSON(fiber.Map{"status": "ok", "service": "chatflow-api"})
 	})
 
-	// WebSocket upgrade — token passed as query param
-	// e.g. ws://localhost:8080/ws?token=<access_token>
+	// WebSocket
 	app.Use("/ws", func(c *fiber.Ctx) error {
 		if fiberws.IsWebSocketUpgrade(c) {
 			return c.Next()
@@ -93,15 +151,14 @@ func main() {
 
 	// Protected
 	protected := api.Group("/", authService.Middleware())
-
 	wsHandler.RegisterRoutes(protected.Group("/workspaces"))
-
 	chHandler.RegisterRoutes(
 		protected.Group("/workspaces/:wsID/channels"),
 		protected.Group("/channels"),
 	)
 
-	// TODO Day 8: message routes
+	// TODO Day 9:  presence routes
+	// TODO Day 13: search routes
 
 	// ── Start ─────────────────────────────────────────────────
 	log.Printf("ChatFlow API starting on :%s\n", cfg.Port)
