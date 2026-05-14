@@ -14,6 +14,7 @@ import (
 	"github.com/constantine950/ChatFlow/internal/channel"
 	"github.com/constantine950/ChatFlow/internal/kafka"
 	"github.com/constantine950/ChatFlow/internal/message"
+	"github.com/constantine950/ChatFlow/internal/presence"
 	ws "github.com/constantine950/ChatFlow/internal/websocket"
 	"github.com/constantine950/ChatFlow/internal/workspace"
 	"github.com/constantine950/ChatFlow/pkg/cache"
@@ -52,10 +53,10 @@ func main() {
 	defer producer.Close()
 	log.Println("kafka: producer ready")
 
-	// ── Repositories ──────────────────────────────────────────
-	authRepo    := auth.NewRepository(db)
-	authService := auth.NewService(authRepo, redisClient, cfg.JWTSecret)
-	authHandler := auth.NewHandler(authService)
+	// ── Services ──────────────────────────────────────────────
+	authRepo     := auth.NewRepository(db)
+	authService  := auth.NewService(authRepo, redisClient, cfg.JWTSecret)
+	authHandler  := auth.NewHandler(authService)
 
 	wsRepo    := workspace.NewRepository(db)
 	wsService := workspace.NewService(wsRepo)
@@ -67,12 +68,14 @@ func main() {
 
 	msgRepo := message.NewRepository(db)
 
+	presenceSvc     := presence.NewService(redisClient)
+	presenceHandler := presence.NewHandler(presenceSvc)
+
 	// ── WebSocket hub ─────────────────────────────────────────
-	hub := ws.NewHub(producer)
+	hub := ws.NewHub(producer, presenceSvc)
 	go hub.Run()
 
 	// ── Kafka consumer ────────────────────────────────────────
-	// Handler: write confirmed message to Postgres, then broadcast via WS hub
 	consumer := kafka.NewConsumer(brokers, func(ctx context.Context, msg kafka.ChatMessage) error {
 		var parentID *string
 		if msg.ParentMessageID != "" {
@@ -90,7 +93,6 @@ func main() {
 			return err
 		}
 
-		// Broadcast the DB-confirmed message to all channel subscribers
 		hub.BroadcastToChannel(saved.ChannelID, ws.Event{
 			Type: ws.EventMessageNew,
 			Payload: ws.MessageNewPayload{
@@ -106,7 +108,6 @@ func main() {
 		return nil
 	})
 
-	// Run consumer in background
 	consumerCtx, cancelConsumer := context.WithCancel(context.Background())
 	defer cancelConsumer()
 	go consumer.Run(consumerCtx)
@@ -135,7 +136,8 @@ func main() {
 		return c.JSON(fiber.Map{"status": "ok", "service": "chatflow-api"})
 	})
 
-	// WebSocket
+	// WebSocket — token + workspace_id as query params
+	// ws://localhost:8080/ws?token=xxx&workspace_id=yyy
 	app.Use("/ws", func(c *fiber.Ctx) error {
 		if fiberws.IsWebSocketUpgrade(c) {
 			return c.Next()
@@ -157,7 +159,10 @@ func main() {
 		protected.Group("/channels"),
 	)
 
-	// TODO Day 9:  presence routes
+	// Presence
+presenceHandler.RegisterRoutes(protected.Group("/workspaces/:wsID/presence"))
+
+	// TODO Day 10: typing via Redis pub/sub
 	// TODO Day 13: search routes
 
 	// ── Start ─────────────────────────────────────────────────

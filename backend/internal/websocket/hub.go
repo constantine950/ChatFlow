@@ -10,6 +10,7 @@ import (
 
 	"github.com/constantine950/ChatFlow/internal/auth"
 	"github.com/constantine950/ChatFlow/internal/kafka"
+	"github.com/constantine950/ChatFlow/internal/presence"
 	fiberws "github.com/gofiber/websocket/v2"
 	"github.com/google/uuid"
 )
@@ -22,16 +23,17 @@ type Hub struct {
 	register   chan *Client
 	unregister chan *Client
 
-	// Kafka producer — injected at startup
 	producer *kafka.Producer
+	presence *presence.Service
 }
 
-func NewHub(producer *kafka.Producer) *Hub {
+func NewHub(producer *kafka.Producer, presenceSvc *presence.Service) *Hub {
 	return &Hub{
 		clients:    make(map[*Client]bool),
 		register:   make(chan *Client, 64),
 		unregister: make(chan *Client, 64),
 		producer:   producer,
+		presence:   presenceSvc,
 	}
 }
 
@@ -52,12 +54,29 @@ func (h *Hub) Run() {
 			}
 			h.mu.Unlock()
 			log.Printf("ws: client disconnected user=%s total=%d", client.UserID, h.count())
+
+			// Mark offline in all workspace presence sets the client was in
+			if client.WorkspaceID != "" {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				if err := h.presence.SetOffline(ctx, client.WorkspaceID, client.UserID); err != nil {
+					log.Printf("presence: failed to set offline: %v", err)
+				}
+				cancel()
+
+				// Broadcast offline status to workspace
+				h.BroadcastToChannel(client.WorkspaceID, Event{
+					Type: EventPresenceUpdate,
+					Payload: PresenceUpdatePayload{
+						UserID: client.UserID,
+						Status: "offline",
+					},
+				})
+			}
 		}
 	}
 }
 
 // BroadcastToChannel sends an event to every client subscribed to channelID.
-// Called by the Kafka consumer after a message is written to Postgres.
 func (h *Hub) BroadcastToChannel(channelID string, event Event) {
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -113,8 +132,30 @@ func (h *Hub) Handler(authService *auth.Service) func(*fiberws.Conn) {
 			return
 		}
 
-		client := newClient(h, conn, claims.UserID, claims.DisplayName)
+		// Workspace ID passed as query param for presence tracking
+		// e.g. ws://localhost:8080/ws?token=xxx&workspace_id=yyy
+		workspaceID := conn.Query("workspace_id")
+
+		client := newClient(h, conn, claims.UserID, claims.DisplayName, workspaceID)
 		h.register <- client
+
+		// Fire initial heartbeat so user appears online immediately
+		if workspaceID != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			if err := h.presence.Heartbeat(ctx, workspaceID, claims.UserID); err != nil {
+				log.Printf("presence: initial heartbeat failed: %v", err)
+			}
+			cancel()
+
+			// Broadcast online status
+			h.BroadcastToChannel(workspaceID, Event{
+				Type: EventPresenceUpdate,
+				Payload: PresenceUpdatePayload{
+					UserID: claims.UserID,
+					Status: "online",
+				},
+			})
+		}
 
 		go client.WritePump()
 		client.ReadPump()
@@ -143,8 +184,14 @@ func (h *Hub) handleEvent(c *Client, event Event) {
 		c.UnsubscribeFrom(payload.ChannelID)
 
 	case EventPresenceHeartbeat:
-		// Wired to Redis on Day 9
-		log.Printf("ws: heartbeat from user=%s", c.UserID)
+		// Update Redis sorted set score = now()
+		if c.WorkspaceID != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := h.presence.Heartbeat(ctx, c.WorkspaceID, c.UserID); err != nil {
+				log.Printf("presence: heartbeat failed for user=%s: %v", c.UserID, err)
+			}
+		}
 
 	case EventTypingStart, EventTypingStop:
 		payload, ok := parsePayload[TypingPayload](event.Payload)
@@ -177,7 +224,6 @@ func (h *Hub) handleEvent(c *Client, event Event) {
 			return
 		}
 
-		// Produce to Kafka. Consumer writes to Postgres then broadcasts.
 		msg := kafka.ChatMessage{
 			ID:              uuid.New().String(),
 			ChannelID:       payload.ChannelID,
