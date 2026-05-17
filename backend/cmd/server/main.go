@@ -23,7 +23,6 @@ import (
 )
 
 func main() {
-	// ── Config ────────────────────────────────────────────────
 	cfg := config.Load()
 
 	// ── Database ──────────────────────────────────────────────
@@ -44,19 +43,17 @@ func main() {
 
 	// ── Kafka ─────────────────────────────────────────────────
 	brokers := strings.Split(cfg.KafkaBrokers, ",")
-
 	if err := kafka.EnsureTopics(brokers); err != nil {
 		log.Printf("kafka: could not ensure topics: %v", err)
 	}
-
 	producer := kafka.NewProducer(brokers)
 	defer producer.Close()
 	log.Println("kafka: producer ready")
 
 	// ── Services ──────────────────────────────────────────────
-	authRepo     := auth.NewRepository(db)
-	authService  := auth.NewService(authRepo, redisClient, cfg.JWTSecret)
-	authHandler  := auth.NewHandler(authService)
+	authRepo    := auth.NewRepository(db)
+	authService := auth.NewService(authRepo, redisClient, cfg.JWTSecret)
+	authHandler := auth.NewHandler(authService)
 
 	wsRepo    := workspace.NewRepository(db)
 	wsService := workspace.NewService(wsRepo)
@@ -70,10 +67,17 @@ func main() {
 
 	presenceSvc     := presence.NewService(redisClient)
 	presenceHandler := presence.NewHandler(presenceSvc)
+	typingSvc       := presence.NewTypingService(redisClient)
 
 	// ── WebSocket hub ─────────────────────────────────────────
-	hub := ws.NewHub(producer, presenceSvc)
+	hub := ws.NewHub(producer, presenceSvc, typingSvc)
 	go hub.Run()
+
+	// ── Typing subscriber ─────────────────────────────────────
+	// Listens on Redis pub/sub and forwards typing events to WS clients
+	typingCtx, cancelTyping := context.WithCancel(context.Background())
+	defer cancelTyping()
+	go hub.StartTypingSubscriber(typingCtx)
 
 	// ── Kafka consumer ────────────────────────────────────────
 	consumer := kafka.NewConsumer(brokers, func(ctx context.Context, msg kafka.ChatMessage) error {
@@ -114,7 +118,7 @@ func main() {
 	defer consumer.Close()
 	log.Println("kafka: consumer started")
 
-	// ── Fiber app ─────────────────────────────────────────────
+	// ── Fiber ─────────────────────────────────────────────────
 	app := fiber.New(fiber.Config{
 		AppName: "ChatFlow API v1",
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
@@ -136,8 +140,6 @@ func main() {
 		return c.JSON(fiber.Map{"status": "ok", "service": "chatflow-api"})
 	})
 
-	// WebSocket — token + workspace_id as query params
-	// ws://localhost:8080/ws?token=xxx&workspace_id=yyy
 	app.Use("/ws", func(c *fiber.Ctx) error {
 		if fiberws.IsWebSocketUpgrade(c) {
 			return c.Next()
@@ -147,25 +149,18 @@ func main() {
 	app.Get("/ws", fiberws.New(hub.Handler(authService)))
 
 	api := app.Group("/api/v1")
-
-	// Public
 	authHandler.RegisterRoutes(api.Group("/auth"))
 
-	// Protected
 	protected := api.Group("/", authService.Middleware())
 	wsHandler.RegisterRoutes(protected.Group("/workspaces"))
 	chHandler.RegisterRoutes(
 		protected.Group("/workspaces/:wsID/channels"),
 		protected.Group("/channels"),
 	)
+	presenceHandler.RegisterRoutes(protected.Group("/workspaces/:wsID/presence"))
 
-	// Presence
-presenceHandler.RegisterRoutes(protected.Group("/workspaces/:wsID/presence"))
-
-	// TODO Day 10: typing via Redis pub/sub
 	// TODO Day 13: search routes
 
-	// ── Start ─────────────────────────────────────────────────
 	log.Printf("ChatFlow API starting on :%s\n", cfg.Port)
 	log.Fatal(app.Listen(":" + cfg.Port))
 }

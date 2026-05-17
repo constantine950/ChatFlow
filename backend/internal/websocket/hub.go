@@ -25,15 +25,23 @@ type Hub struct {
 
 	producer *kafka.Producer
 	presence *presence.Service
+	typing   *presence.TypingService
+
+	// Track auto-expire cancel funcs per user+channel
+	// so a new typing.start cancels the previous 3s timer
+	typingCancels   map[string]context.CancelFunc
+	typingCancelsMu sync.Mutex
 }
 
-func NewHub(producer *kafka.Producer, presenceSvc *presence.Service) *Hub {
+func NewHub(producer *kafka.Producer, presenceSvc *presence.Service, typingSvc *presence.TypingService) *Hub {
 	return &Hub{
-		clients:    make(map[*Client]bool),
-		register:   make(chan *Client, 64),
-		unregister: make(chan *Client, 64),
-		producer:   producer,
-		presence:   presenceSvc,
+		clients:       make(map[*Client]bool),
+		register:      make(chan *Client, 64),
+		unregister:    make(chan *Client, 64),
+		producer:      producer,
+		presence:      presenceSvc,
+		typing:        typingSvc,
+		typingCancels: make(map[string]context.CancelFunc),
 	}
 }
 
@@ -55,7 +63,6 @@ func (h *Hub) Run() {
 			h.mu.Unlock()
 			log.Printf("ws: client disconnected user=%s total=%d", client.UserID, h.count())
 
-			// Mark offline in all workspace presence sets the client was in
 			if client.WorkspaceID != "" {
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				if err := h.presence.SetOffline(ctx, client.WorkspaceID, client.UserID); err != nil {
@@ -63,7 +70,6 @@ func (h *Hub) Run() {
 				}
 				cancel()
 
-				// Broadcast offline status to workspace
 				h.BroadcastToChannel(client.WorkspaceID, Event{
 					Type: EventPresenceUpdate,
 					Payload: PresenceUpdatePayload{
@@ -74,6 +80,26 @@ func (h *Hub) Run() {
 			}
 		}
 	}
+}
+
+// StartTypingSubscriber starts the Redis pub/sub loop that forwards typing
+// events to local WebSocket clients. Call once in a goroutine at startup.
+func (h *Hub) StartTypingSubscriber(ctx context.Context) {
+	h.typing.Subscribe(ctx, func(event presence.TypingEvent) {
+		wsEvent := Event{
+			Type: EventTypingIndicator,
+			Payload: TypingIndicatorPayload{
+				ChannelID:   event.ChannelID,
+				UserID:      event.UserID,
+				DisplayName: event.DisplayName,
+			},
+		}
+		// Only broadcast "start" — "stop" clears the indicator on the client
+		if event.Type == "stop" {
+			wsEvent.Type = EventTypingStop
+		}
+		h.BroadcastToChannel(event.ChannelID, wsEvent)
+	})
 }
 
 // BroadcastToChannel sends an event to every client subscribed to channelID.
@@ -132,14 +158,10 @@ func (h *Hub) Handler(authService *auth.Service) func(*fiberws.Conn) {
 			return
 		}
 
-		// Workspace ID passed as query param for presence tracking
-		// e.g. ws://localhost:8080/ws?token=xxx&workspace_id=yyy
 		workspaceID := conn.Query("workspace_id")
-
 		client := newClient(h, conn, claims.UserID, claims.DisplayName, workspaceID)
 		h.register <- client
 
-		// Fire initial heartbeat so user appears online immediately
 		if workspaceID != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			if err := h.presence.Heartbeat(ctx, workspaceID, claims.UserID); err != nil {
@@ -147,7 +169,6 @@ func (h *Hub) Handler(authService *auth.Service) func(*fiberws.Conn) {
 			}
 			cancel()
 
-			// Broadcast online status
 			h.BroadcastToChannel(workspaceID, Event{
 				Type: EventPresenceUpdate,
 				Payload: PresenceUpdatePayload{
@@ -184,29 +205,69 @@ func (h *Hub) handleEvent(c *Client, event Event) {
 		c.UnsubscribeFrom(payload.ChannelID)
 
 	case EventPresenceHeartbeat:
-		// Update Redis sorted set score = now()
 		if c.WorkspaceID != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			if err := h.presence.Heartbeat(ctx, c.WorkspaceID, c.UserID); err != nil {
-				log.Printf("presence: heartbeat failed for user=%s: %v", c.UserID, err)
+				log.Printf("presence: heartbeat failed: %v", err)
 			}
 		}
 
-	case EventTypingStart, EventTypingStop:
+	case EventTypingStart:
 		payload, ok := parsePayload[TypingPayload](event.Payload)
 		if !ok {
-			c.sendError("invalid_payload", "typing event requires channel_id")
+			c.sendError("invalid_payload", "typing.start requires channel_id")
 			return
 		}
-		// Redis pub/sub wired on Day 10 — direct broadcast for now
-		h.BroadcastToChannel(payload.ChannelID, Event{
-			Type: EventTypingIndicator,
-			Payload: TypingIndicatorPayload{
-				ChannelID:   payload.ChannelID,
-				UserID:      c.UserID,
-				DisplayName: c.DisplayName,
-			},
+
+		// Cancel previous auto-expire timer for this user+channel
+		timerKey := c.UserID + ":" + payload.ChannelID
+		h.typingCancelsMu.Lock()
+		if cancel, exists := h.typingCancels[timerKey]; exists {
+			cancel()
+		}
+		expireCtx, expireCancel := context.WithCancel(context.Background())
+		h.typingCancels[timerKey] = expireCancel
+		h.typingCancelsMu.Unlock()
+
+		// Publish typing.start via Redis pub/sub
+		typingEvent := presence.TypingEvent{
+			ChannelID:   payload.ChannelID,
+			UserID:      c.UserID,
+			DisplayName: c.DisplayName,
+			Type:        "start",
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := h.typing.Publish(ctx, typingEvent); err != nil {
+			log.Printf("typing: publish failed: %v", err)
+		}
+
+		// Auto-expire after 3s of inactivity
+		go h.typing.AutoExpire(expireCtx, typingEvent)
+
+	case EventTypingStop:
+		payload, ok := parsePayload[TypingPayload](event.Payload)
+		if !ok {
+			return
+		}
+
+		// Cancel the auto-expire timer
+		timerKey := c.UserID + ":" + payload.ChannelID
+		h.typingCancelsMu.Lock()
+		if cancel, exists := h.typingCancels[timerKey]; exists {
+			cancel()
+			delete(h.typingCancels, timerKey)
+		}
+		h.typingCancelsMu.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = h.typing.Publish(ctx, presence.TypingEvent{
+			ChannelID:   payload.ChannelID,
+			UserID:      c.UserID,
+			DisplayName: c.DisplayName,
+			Type:        "stop",
 		})
 
 	case EventMessageSend:
