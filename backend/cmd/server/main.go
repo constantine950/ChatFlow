@@ -50,7 +50,7 @@ func main() {
 	defer producer.Close()
 	log.Println("kafka: producer ready")
 
-	// ── Services ──────────────────────────────────────────────
+	// ── Wire layers ───────────────────────────────────────────
 	authRepo    := auth.NewRepository(db)
 	authService := auth.NewService(authRepo, redisClient, cfg.JWTSecret)
 	authHandler := auth.NewHandler(authService)
@@ -63,7 +63,9 @@ func main() {
 	chService := channel.NewService(chRepo)
 	chHandler := channel.NewHandler(chService)
 
-	msgRepo := message.NewRepository(db)
+	msgRepo    := message.NewRepository(db)
+	msgService := message.NewService(msgRepo)
+	msgHandler := message.NewHandler(msgService)
 
 	presenceSvc     := presence.NewService(redisClient)
 	presenceHandler := presence.NewHandler(presenceSvc)
@@ -73,8 +75,6 @@ func main() {
 	hub := ws.NewHub(producer, presenceSvc, typingSvc)
 	go hub.Run()
 
-	// ── Typing subscriber ─────────────────────────────────────
-	// Listens on Redis pub/sub and forwards typing events to WS clients
 	typingCtx, cancelTyping := context.WithCancel(context.Background())
 	defer cancelTyping()
 	go hub.StartTypingSubscriber(typingCtx)
@@ -100,12 +100,12 @@ func main() {
 		hub.BroadcastToChannel(saved.ChannelID, ws.Event{
 			Type: ws.EventMessageNew,
 			Payload: ws.MessageNewPayload{
-				ID:          saved.ID,
-				ChannelID:   saved.ChannelID,
-				UserID:      saved.UserID,
-				DisplayName: msg.DisplayName,
-				Content:     saved.Content,
-				CreatedAt:   saved.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+				ID:              saved.ID,
+				ChannelID:       saved.ChannelID,
+				UserID:          saved.UserID,
+				DisplayName:     msg.DisplayName,
+				Content:         saved.Content,
+				CreatedAt:       saved.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 			},
 		})
 
@@ -158,6 +158,12 @@ func main() {
 		protected.Group("/channels"),
 	)
 	presenceHandler.RegisterRoutes(protected.Group("/workspaces/:wsID/presence"))
+
+	// Message routes — two mount points
+	msgHandler.RegisterRoutes(
+		protected.Group("/channels"),   // GET /channels/:id/messages
+		protected.Group("/messages"),   // GET /messages/:id/thread, PATCH, DELETE
+	)
 
 	// TODO Day 13: search routes
 
