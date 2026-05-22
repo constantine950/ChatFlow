@@ -2,8 +2,72 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Base resets on top of Tailwind's preflight */
+:root {
+  --font-sans: "DM Sans", sans-serif;
+  --font-mono: "DM Mono", monospace;
+
+  /* ChatFlow dark theme palette */
+  --bg-primary: #0f1117;
+  --bg-secondary: #161b27;
+  --bg-tertiary: #1e2535;
+  --bg-hover: #252d3d;
+  --bg-active: #2a3347;
+
+  --text-primary: #e8ecf2;
+  --text-secondary: #8b95a8;
+  --text-muted: #4e5a6e;
+
+  --accent: #4f8ef7;
+  --accent-hover: #6ba3f9;
+  --accent-dim: rgba(79, 142, 247, 0.12);
+
+  --border: rgba(255, 255, 255, 0.06);
+  --border-light: rgba(255, 255, 255, 0.1);
+
+  --online: #34c97a;
+  --warning: #f5a623;
+  --danger: #f05252;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
 html,
 body {
   height: 100%;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--bg-hover);
+  border-radius: 2px;
+}
+
+/* Selection */
+::selection {
+  background: var(--accent-dim);
+}
+
+mark {
+  background: rgba(79, 142, 247, 0.25);
+  color: var(--accent-hover);
+  border-radius: 2px;
+  padding: 0 2px;
 }
