@@ -15,6 +15,7 @@ import (
 	"github.com/constantine950/ChatFlow/internal/kafka"
 	"github.com/constantine950/ChatFlow/internal/message"
 	"github.com/constantine950/ChatFlow/internal/presence"
+	"github.com/constantine950/ChatFlow/internal/search"
 	ws "github.com/constantine950/ChatFlow/internal/websocket"
 	"github.com/constantine950/ChatFlow/internal/workspace"
 	"github.com/constantine950/ChatFlow/pkg/cache"
@@ -50,7 +51,7 @@ func main() {
 	defer producer.Close()
 	log.Println("kafka: producer ready")
 
-	// ── Services ──────────────────────────────────────────────
+	// ── Wire layers ───────────────────────────────────────────
 	authRepo    := auth.NewRepository(db)
 	authService := auth.NewService(authRepo, redisClient, cfg.JWTSecret)
 	authHandler := auth.NewHandler(authService)
@@ -74,6 +75,9 @@ func main() {
 	presenceHandler := presence.NewHandler(presenceSvc)
 	typingSvc       := presence.NewTypingService(redisClient)
 
+	searchService := search.NewService(db)
+	searchHandler := search.NewHandler(searchService)
+
 	// ── WebSocket hub ─────────────────────────────────────────
 	hub := ws.NewHub(producer, presenceSvc, typingSvc)
 	go hub.Run()
@@ -82,7 +86,7 @@ func main() {
 	defer cancelTyping()
 	go hub.StartTypingSubscriber(typingCtx)
 
-	// ── Reactions handler with WS broadcast injected ──────────
+	// ── Reactions handler ─────────────────────────────────────
 	rxHandler := message.NewReactionsHandler(rxService, func(channelID, messageID string, summaries []*message.ReactionSummary) {
 		hub.BroadcastToChannel(channelID, ws.Event{
 			Type: ws.EventReactionUpdate,
@@ -172,13 +176,12 @@ func main() {
 		protected.Group("/channels"),
 	)
 	presenceHandler.RegisterRoutes(protected.Group("/workspaces/:wsID/presence"))
+	searchHandler.RegisterRoutes(protected.Group("/workspaces/:wsID/search"))
 	msgHandler.RegisterRoutes(
 		protected.Group("/channels"),
 		protected.Group("/messages"),
 	)
 	rxHandler.RegisterRoutes(protected.Group("/messages"))
-
-	// TODO Day 13: search routes
 
 	log.Printf("ChatFlow API starting on :%s\n", cfg.Port)
 	log.Fatal(app.Listen(":" + cfg.Port))
