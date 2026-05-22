@@ -1,37 +1,34 @@
 package websocket
 
-// Event types — must match the PRD event contract exactly.
 // Client → Server
 const (
-	EventMessageSend      = "message.send"
-	EventTypingStart      = "typing.start"
-	EventTypingStop       = "typing.stop"
+	EventMessageSend       = "message.send"
+	EventTypingStart       = "typing.start"
+	EventTypingStop        = "typing.stop"
 	EventPresenceHeartbeat = "presence.heartbeat"
-	EventChannelJoin      = "channel.join"
-	EventChannelLeave     = "channel.leave"
+	EventChannelJoin       = "channel.join"
+	EventChannelLeave      = "channel.leave"
 )
 
 // Server → Client
 const (
-	EventMessageNew     = "message.new"
-	EventMessageUpdated = "message.updated"
-	EventMessageDeleted = "message.deleted"
+	EventMessageNew      = "message.new"
+	EventMessageUpdated  = "message.updated"
+	EventMessageDeleted  = "message.deleted"
 	EventTypingIndicator = "typing.indicator"
-	EventPresenceUpdate = "presence.update"
-	EventReactionUpdate = "reaction.update"
-	EventError          = "error"
+	EventPresenceUpdate  = "presence.update"
+	EventReactionUpdate  = "reaction.update"
+	EventError           = "error"
 )
 
-// Envelope
-// Every WebSocket message — in both directions — is wrapped in
-// this envelope so the hub knows how to route it.
+// ── Envelope ──────────────────────────────────────────────────
 
 type Event struct {
 	Type    string      `json:"type"`
 	Payload interface{} `json:"payload"`
 }
 
-// Client → Server payloads
+// ── Client → Server payloads ──────────────────────────────────
 
 type MessageSendPayload struct {
 	ChannelID       string `json:"channel_id"`
@@ -47,7 +44,7 @@ type ChannelPayload struct {
 	ChannelID string `json:"channel_id"`
 }
 
-// Server → Client payloads
+// ── Server → Client payloads ──────────────────────────────────
 
 type MessageNewPayload struct {
 	ID              string  `json:"id"`
@@ -67,7 +64,13 @@ type TypingIndicatorPayload struct {
 
 type PresenceUpdatePayload struct {
 	UserID string `json:"user_id"`
-	Status string `json:"status"` // "online" | "offline"
+	Status string `json:"status"`
+}
+
+// ReactionUpdatePayload is broadcast when any reaction changes on a message.
+type ReactionUpdatePayload struct {
+	MessageID string      `json:"message_id"`
+	Reactions interface{} `json:"reactions"` // []*message.ReactionSummary
 }
 
 type ErrorPayload struct {
