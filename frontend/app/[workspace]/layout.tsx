@@ -2,7 +2,6 @@
 import { useEffect } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { workspaceApi, channelApi } from "../../lib/api/workspace";
-import { useAuthStore } from "../../lib/store/authStore";
 import { useWorkspaceStore } from "../../lib/store/workspaceStore";
 import { useWebSocket } from "../../lib/hooks/useWebSocket";
 import Sidebar from "../../components/layout/Sidebar";
@@ -15,24 +14,19 @@ export default function WorkspaceLayout({
   const router = useRouter();
   const params = useParams();
   const slug = params?.workspace as string;
+  const channelId = params?.channel as string;
 
-  const { accessToken } = useAuthStore();
-  const {
-    workspaces,
-    setWorkspaces,
-    activeWorkspace,
-    setActiveWorkspace,
-    setChannels,
-  } = useWorkspaceStore();
+  const { setWorkspaces, setActiveWorkspace, activeWorkspace, setChannels } =
+    useWorkspaceStore();
+  const { joinChannel } = useWebSocket(activeWorkspace?.id ?? null);
 
-  // Redirect to login if not authenticated
   useEffect(() => {
     const token = localStorage.getItem("access_token");
-    if (!token) router.replace("/login");
-  }, [router]);
+    if (!token) {
+      router.replace("/login");
+      return;
+    }
 
-  // Load workspaces
-  useEffect(() => {
     workspaceApi
       .list()
       .then(({ data }) => {
@@ -43,16 +37,15 @@ export default function WorkspaceLayout({
       .catch(() => router.replace("/login"));
   }, [slug]);
 
-  // Load channels when workspace changes
   useEffect(() => {
     if (!activeWorkspace) return;
-    channelApi.list(activeWorkspace.id).then(({ data }) => {
-      setChannels(data);
-    });
+    channelApi.list(activeWorkspace.id).then(({ data }) => setChannels(data));
   }, [activeWorkspace?.id]);
 
-  // Start WebSocket connection
-  useWebSocket(activeWorkspace?.id ?? null);
+  // Join the WS channel room whenever the active channel changes
+  useEffect(() => {
+    if (channelId) joinChannel(channelId);
+  }, [channelId, joinChannel]);
 
   if (!activeWorkspace) {
     return (

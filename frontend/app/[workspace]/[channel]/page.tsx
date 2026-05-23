@@ -1,8 +1,11 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useContext } from "react";
 import { useParams } from "next/navigation";
 import { useWorkspaceStore } from "@/lib/store/workspaceStore";
+import MessageList from "@/components/messages/MessageList";
 
+// We'll pass joinChannel via a context set up in the workspace layout
+// For now, read it from the global ws ref set by useWebSocket
 export default function ChannelPage() {
   const params = useParams();
   const channelId = params?.channel as string;
@@ -31,12 +34,10 @@ export default function ChannelPage() {
         )}
       </div>
 
-      {/* Message area — Day 16 */}
-      <div className="flex flex-1 items-center justify-center text-[var(--text-muted)] text-sm">
-        Message list coming on Day 16
-      </div>
+      {/* Message list */}
+      {channelId && <MessageList channelId={channelId} />}
 
-      {/* Input area — Day 17 */}
+      {/* Input placeholder — Day 17 */}
       <div className="border-t border-[var(--border)] p-4">
         <div
           className="rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] px-4 py-3
