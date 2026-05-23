@@ -1,23 +1,44 @@
 "use client";
-import { useEffect, useContext } from "react";
+import { useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { useWorkspaceStore } from "@/lib/store/workspaceStore";
+import { useWebSocket } from "@/lib/hooks/useWebSocket";
 import MessageList from "@/components/messages/MessageList";
+import MessageInput from "@/components/messages/MessageInput";
 
-// We'll pass joinChannel via a context set up in the workspace layout
-// For now, read it from the global ws ref set by useWebSocket
 export default function ChannelPage() {
   const params = useParams();
   const channelId = params?.channel as string;
-  const { channels, setActiveChannel, activeChannel } = useWorkspaceStore();
+
+  const { channels, setActiveChannel, activeChannel, activeWorkspace } =
+    useWorkspaceStore();
+  const { sendMessage, sendTyping, joinChannel } = useWebSocket(
+    activeWorkspace?.id ?? null,
+  );
 
   useEffect(() => {
     const ch = channels.find((c) => c.id === channelId);
     if (ch) setActiveChannel(ch);
   }, [channelId, channels]);
 
+  // Subscribe to channel events on the WS hub
+  useEffect(() => {
+    if (channelId) joinChannel(channelId);
+  }, [channelId]);
+
+  const handleSend = useCallback(
+    (content: string) => {
+      sendMessage(channelId, content);
+    },
+    [channelId, sendMessage],
+  );
+
+  const handleTyping = useCallback(() => {
+    sendTyping(channelId);
+  }, [channelId, sendTyping]);
+
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col overflow-hidden">
       {/* Channel header */}
       <div className="flex h-14 flex-shrink-0 items-center border-b border-[var(--border)] px-6">
         <span className="mr-1.5 text-[var(--text-muted)]">#</span>
@@ -34,18 +55,18 @@ export default function ChannelPage() {
         )}
       </div>
 
-      {/* Message list */}
+      {/* Message list — fills remaining space */}
       {channelId && <MessageList channelId={channelId} />}
 
-      {/* Input placeholder — Day 17 */}
-      <div className="border-t border-[var(--border)] p-4">
-        <div
-          className="rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] px-4 py-3
-                        text-sm text-[var(--text-muted)]"
-        >
-          Message input coming on Day 17
-        </div>
-      </div>
+      {/* Message input */}
+      {activeChannel && (
+        <MessageInput
+          channelId={channelId}
+          channelName={activeChannel.name}
+          onSend={handleSend}
+          onTyping={handleTyping}
+        />
+      )}
     </div>
   );
 }

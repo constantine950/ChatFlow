@@ -101,18 +101,38 @@ export function useWebSocket(workspaceId: string | null) {
 
   // Subscribe to a channel
   const joinChannel = useCallback((channelId: string) => {
-    wsRef.current?.send(
-      JSON.stringify({
-        type: "channel.join",
-        payload: { channel_id: channelId },
-      }),
-    );
+    const ws = wsRef.current;
+    if (!ws) return;
+
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({
+          type: "channel.join",
+          payload: { channel_id: channelId },
+        }),
+      );
+    } else if (ws.readyState === WebSocket.CONNECTING) {
+      // Wait for connection then send
+      ws.addEventListener(
+        "open",
+        () => {
+          ws.send(
+            JSON.stringify({
+              type: "channel.join",
+              payload: { channel_id: channelId },
+            }),
+          );
+        },
+        { once: true },
+      );
+    }
   }, []);
 
   // Send a message
   const sendMessage = useCallback(
     (channelId: string, content: string, parentMessageId?: string) => {
-      wsRef.current?.send(
+      if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+      wsRef.current.send(
         JSON.stringify({
           type: "message.send",
           payload: {
@@ -126,9 +146,9 @@ export function useWebSocket(workspaceId: string | null) {
     [],
   );
 
-  // Send typing indicator
   const sendTyping = useCallback((channelId: string) => {
-    wsRef.current?.send(
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(
       JSON.stringify({
         type: "typing.start",
         payload: { channel_id: channelId },
