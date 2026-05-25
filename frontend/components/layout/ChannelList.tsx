@@ -1,6 +1,7 @@
 "use client";
 import { useRouter, useParams } from "next/navigation";
 import { useWorkspaceStore } from "../../lib/store/workspaceStore";
+import { channelApi } from "@/lib/api/workspace";
 
 export default function ChannelList() {
   const router = useRouter();
@@ -9,9 +10,12 @@ export default function ChannelList() {
     useWorkspaceStore();
   const activeChannelId = params?.channel as string;
 
-  function navigate(channelId: string) {
+  async function navigate(channelId: string) {
     const ch = channels.find((c) => c.id === channelId);
     if (ch && activeWorkspace) {
+      try {
+        await channelApi.join(channelId); // joins if not already a member
+      } catch {} // ignore if already a member
       setActiveChannel(ch);
       router.push(`/${activeWorkspace.slug}/${ch.id}`);
     }

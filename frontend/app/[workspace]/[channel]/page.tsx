@@ -2,7 +2,7 @@
 import { useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { useWorkspaceStore } from "@/lib/store/workspaceStore";
-import { useWebSocket } from "@/lib/hooks/useWebSocket";
+import { useWS } from "@/lib/hooks/WSContext";
 import MessageList from "@/components/messages/MessageList";
 import MessageInput from "@/components/messages/MessageInput";
 
@@ -10,18 +10,14 @@ export default function ChannelPage() {
   const params = useParams();
   const channelId = params?.channel as string;
 
-  const { channels, setActiveChannel, activeChannel, activeWorkspace } =
-    useWorkspaceStore();
-  const { sendMessage, sendTyping, joinChannel } = useWebSocket(
-    activeWorkspace?.id ?? null,
-  );
+  const { channels, setActiveChannel, activeChannel } = useWorkspaceStore();
+  const { sendMessage, sendTyping, joinChannel } = useWS();
 
   useEffect(() => {
     const ch = channels.find((c) => c.id === channelId);
     if (ch) setActiveChannel(ch);
   }, [channelId, channels]);
 
-  // Subscribe to channel events on the WS hub
   useEffect(() => {
     if (channelId) joinChannel(channelId);
   }, [channelId]);
@@ -39,7 +35,6 @@ export default function ChannelPage() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      {/* Channel header */}
       <div className="flex h-14 flex-shrink-0 items-center border-b border-[var(--border)] px-6">
         <span className="mr-1.5 text-[var(--text-muted)]">#</span>
         <span className="font-semibold text-[var(--text-primary)]">
@@ -55,10 +50,8 @@ export default function ChannelPage() {
         )}
       </div>
 
-      {/* Message list — fills remaining space */}
       {channelId && <MessageList channelId={channelId} />}
 
-      {/* Message input */}
       {activeChannel && (
         <MessageInput
           channelId={channelId}

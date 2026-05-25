@@ -1,38 +1,70 @@
 "use client";
-import { useEffect, useRef, useCallback } from "react";
-import { useAuthStore } from "../store/authStore";
+import {
+  createContext,
+  useContext,
+  useRef,
+  useEffect,
+  useCallback,
+  ReactNode,
+} from "react";
 import { useMessageStore } from "../store/messageStore";
-import { useWorkspaceStore } from "../store/workspaceStore";
 import { Message } from "../api/message";
+import { useAuthStore } from "../store/authStore";
+import { useWorkspaceStore } from "../store/workspaceStore";
 
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8080";
 
-export function useWebSocket(workspaceId: string | null) {
+interface WSContextValue {
+  joinChannel: (channelId: string) => void;
+  sendMessage: (
+    channelId: string,
+    content: string,
+    parentMessageId?: string,
+  ) => void;
+  sendTyping: (channelId: string) => void;
+}
+
+const WSContext = createContext<WSContextValue>({
+  joinChannel: () => {},
+  sendMessage: () => {},
+  sendTyping: () => {},
+});
+
+export function useWS() {
+  return useContext(WSContext);
+}
+
+export function WSProvider({
+  workspaceId,
+  children,
+}: {
+  workspaceId: string;
+  children: ReactNode;
+}) {
   const wsRef = useRef<WebSocket | null>(null);
-  const subscribedChannels = useRef<Set<string>>(new Set());
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
   const reconnectDelay = useRef(1000);
+  const subscribedChannels = useRef<Set<string>>(new Set());
+  const isConnecting = useRef(false);
 
-  // Read token directly from localStorage — Zustand store may not be hydrated yet
-  const accessToken =
-    typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
-
-  const { user } = useAuthStore();
   const { addMessage, setTyping, clearTyping } = useMessageStore();
-  const { setOnlineUsers, onlineUsers } = useWorkspaceStore();
 
   const handleEvent = useCallback(
     (event: { type: string; payload: any }) => {
       switch (event.type) {
         case "message.new": {
           const msg = event.payload as Message;
+          // Deduplicate
+          const existing =
+            useMessageStore.getState().messages[msg.channel_id] ?? [];
+          if (existing.some((m) => m.id === msg.id)) break;
           addMessage(msg.channel_id, msg);
           break;
         }
         case "typing.indicator": {
           const { channel_id, user_id, display_name } = event.payload;
-          const currentUser = useAuthStore.getState().user;
-          if (user_id === currentUser?.id) break;
+          const me = useAuthStore.getState().user;
+          if (user_id === me?.id) break;
           setTyping(channel_id, user_id, display_name);
           setTimeout(() => clearTyping(channel_id, user_id), 4000);
           break;
@@ -56,34 +88,29 @@ export function useWebSocket(workspaceId: string | null) {
           }
           break;
         }
-        default:
-          break;
       }
     },
     [addMessage, setTyping, clearTyping],
   );
 
   const connect = useCallback(() => {
+    if (isConnecting.current) return;
+    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+
     const token = localStorage.getItem("access_token");
     if (!token || !workspaceId) return;
 
-    // Don't reconnect if already open or connecting
-    if (
-      wsRef.current &&
-      (wsRef.current.readyState === WebSocket.OPEN ||
-        wsRef.current.readyState === WebSocket.CONNECTING)
-    )
-      return;
-
+    isConnecting.current = true;
     const url = `${WS_BASE}/ws?token=${token}&workspace_id=${workspaceId}`;
-    console.log("ws: connecting to", url);
+    console.log("ws: connecting...");
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => {
       console.log("ws: connected");
+      isConnecting.current = false;
       reconnectDelay.current = 1000;
-      // Rejoin all previously subscribed channels after reconnect
+      // Rejoin all subscribed channels
       subscribedChannels.current.forEach((channelId) => {
         ws.send(
           JSON.stringify({
@@ -95,37 +122,52 @@ export function useWebSocket(workspaceId: string | null) {
     };
 
     ws.onmessage = (e) => {
-      console.log("ws event:", e.data);
       try {
-        const event = JSON.parse(e.data);
-        handleEvent(event);
+        handleEvent(JSON.parse(e.data));
       } catch {
-        console.error("ws: failed to parse event", e.data);
+        console.error("ws: parse error", e.data);
       }
     };
 
     ws.onclose = () => {
-      console.log(
-        "ws: disconnected, reconnecting in",
-        reconnectDelay.current,
-        "ms",
-      );
+      isConnecting.current = false;
+      console.log("ws: disconnected, reconnecting...");
       reconnectTimer.current = setTimeout(() => {
         reconnectDelay.current = Math.min(reconnectDelay.current * 2, 30000);
         connect();
       }, reconnectDelay.current);
     };
 
-    ws.onerror = (err) => {
-      console.error("ws: error", err);
+    ws.onerror = () => {
+      isConnecting.current = false;
     };
   }, [workspaceId, handleEvent]);
+
+  // Heartbeat
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({ type: "presence.heartbeat", payload: {} }),
+        );
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Connect once on mount
+  useEffect(() => {
+    connect();
+    return () => {
+      clearTimeout(reconnectTimer.current);
+      wsRef.current?.close();
+    };
+  }, [connect]);
 
   const joinChannel = useCallback((channelId: string) => {
     subscribedChannels.current.add(channelId);
     const ws = wsRef.current;
     if (!ws) return;
-
     const send = () =>
       ws.send(
         JSON.stringify({
@@ -133,12 +175,9 @@ export function useWebSocket(workspaceId: string | null) {
           payload: { channel_id: channelId },
         }),
       );
-
-    if (ws.readyState === WebSocket.OPEN) {
-      send();
-    } else if (ws.readyState === WebSocket.CONNECTING) {
+    if (ws.readyState === WebSocket.OPEN) send();
+    else if (ws.readyState === WebSocket.CONNECTING)
       ws.addEventListener("open", send, { once: true });
-    }
   }, []);
 
   const sendMessage = useCallback(
@@ -168,25 +207,9 @@ export function useWebSocket(workspaceId: string | null) {
     );
   }, []);
 
-  // Heartbeat every 30s
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
-          JSON.stringify({ type: "presence.heartbeat", payload: {} }),
-        );
-      }
-    }, 30000);
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    connect();
-    return () => {
-      clearTimeout(reconnectTimer.current);
-      wsRef.current?.close();
-    };
-  }, [connect]);
-
-  return { joinChannel, sendMessage, sendTyping, ws: wsRef };
+  return (
+    <WSContext.Provider value={{ joinChannel, sendMessage, sendTyping }}>
+      {children}
+    </WSContext.Provider>
+  );
 }

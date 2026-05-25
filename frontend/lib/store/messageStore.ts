@@ -41,12 +41,17 @@ export const useMessageStore = create<MessageState>((set) => ({
     })),
 
   addMessage: (channelId, message) =>
-    set((state) => ({
-      messages: {
-        ...state.messages,
-        [channelId]: [...(state.messages[channelId] ?? []), message],
-      },
-    })),
+    set((state) => {
+      const existing = state.messages[channelId] ?? [];
+      // Prevent duplicate messages
+      if (existing.some((m) => m.id === message.id)) return state;
+      return {
+        messages: {
+          ...state.messages,
+          [channelId]: [...existing, message],
+        },
+      };
+    }),
 
   updateMessage: (channelId, update) =>
     set((state) => ({
