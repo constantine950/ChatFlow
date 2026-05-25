@@ -6,9 +6,7 @@ import ChannelList from "./ChannelList";
 
 export default function Sidebar() {
   const router = useRouter();
-  const params = useParams();
-  const { activeWorkspace, workspaces, setActiveWorkspace } =
-    useWorkspaceStore();
+  const { activeWorkspace } = useWorkspaceStore();
   const { user, clearAuth } = useAuthStore();
 
   function handleLogout() {
@@ -16,14 +14,37 @@ export default function Sidebar() {
     router.push("/login");
   }
 
+  const initials = user?.display_name
+    ? user.display_name
+        .split(" ")
+        .map((n) => n[0])
+        .join("")
+        .slice(0, 2)
+        .toUpperCase()
+    : "?";
+
+  // Pick a consistent color based on display name
+  const colors = [
+    "bg-indigo-500",
+    "bg-violet-500",
+    "bg-blue-500",
+    "bg-teal-500",
+    "bg-emerald-500",
+    "bg-orange-500",
+  ];
+  const colorIndex = user?.display_name
+    ? user.display_name.charCodeAt(0) % colors.length
+    : 0;
+  const avatarColor = colors[colorIndex];
+
   return (
     <aside className="flex h-full w-64 flex-shrink-0 flex-col border-r border-[var(--border)] bg-[var(--bg-secondary)]">
       {/* Workspace header */}
-      <div className="flex h-14 items-center justify-between border-b border-[var(--border)] px-4">
-        <div className="flex items-center gap-2 min-w-0">
+      <div className="flex h-14 items-center border-b border-[var(--border)] px-4">
+        <div className="flex items-center gap-2.5 min-w-0">
           <div
             className="flex h-7 w-7 flex-shrink-0 items-center justify-center
-                          rounded-lg bg-[var(--accent)] text-xs font-semibold text-white"
+                          rounded-lg bg-[var(--accent)] text-xs font-bold text-white"
           >
             {activeWorkspace?.name[0].toUpperCase()}
           </div>
@@ -41,24 +62,23 @@ export default function Sidebar() {
       {/* User footer */}
       <div className="flex h-14 items-center gap-3 border-t border-[var(--border)] px-4">
         <div
-          className="flex h-8 w-8 flex-shrink-0 items-center justify-center
-                        rounded-full bg-[var(--bg-active)] text-xs font-medium
-                        text-[var(--text-primary)]"
+          className={`flex h-8 w-8 flex-shrink-0 items-center justify-center
+                        rounded-full ${avatarColor} text-xs font-semibold text-white`}
         >
-          {user?.display_name[0].toUpperCase()}
+          {initials}
         </div>
         <div className="flex-1 min-w-0">
           <p className="truncate text-sm font-medium text-[var(--text-primary)]">
-            {user?.display_name}
+            {user?.display_name ?? "..."}
           </p>
           <p className="truncate text-xs text-[var(--text-muted)]">
-            {user?.email}
+            {user?.email ?? ""}
           </p>
         </div>
         <button
           onClick={handleLogout}
-          className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
           title="Sign out"
+          className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
         >
           <svg
             width="16"
