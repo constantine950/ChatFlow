@@ -16,12 +16,10 @@ func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
 }
 
-// RegisterRoutes mounts message endpoints.
-//
-//	channelRouter  → /channels/:id         (list messages)
-//	messageRouter  → /messages             (thread, edit, delete)
 func (h *Handler) RegisterRoutes(channelRouter fiber.Router, messageRouter fiber.Router) {
-	channelRouter.Get("/:id/messages", h.list)
+	channelRouter.Get("/:id/messages",    h.list)
+	channelRouter.Post("/:id/read",       h.markRead)
+	channelRouter.Get("/:id/unread",      h.unreadCount)
 
 	messageRouter.Get("/:id/thread",  h.getThread)
 	messageRouter.Patch("/:id",       h.edit)
@@ -38,8 +36,26 @@ func (h *Handler) list(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not fetch messages")
 	}
-
 	return c.JSON(resp)
+}
+
+// POST /channels/:id/read  — mark channel as read
+func (h *Handler) markRead(c *fiber.Ctx) error {
+	claims := auth.GetClaims(c)
+	if err := h.service.repo.MarkRead(c.Context(), c.Params("id"), claims.UserID); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not mark as read")
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// GET /channels/:id/unread
+func (h *Handler) unreadCount(c *fiber.Ctx) error {
+	claims := auth.GetClaims(c)
+	count, err := h.service.repo.UnreadCount(c.Context(), c.Params("id"), claims.UserID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not get unread count")
+	}
+	return c.JSON(fiber.Map{"channel_id": c.Params("id"), "unread": count})
 }
 
 // GET /messages/:id/thread
@@ -48,7 +64,6 @@ func (h *Handler) getThread(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not fetch thread")
 	}
-
 	return c.JSON(fiber.Map{
 		"parent_id": c.Params("id"),
 		"data":      replies,
@@ -59,12 +74,10 @@ func (h *Handler) getThread(c *fiber.Ctx) error {
 // PATCH /messages/:id
 func (h *Handler) edit(c *fiber.Ctx) error {
 	claims := auth.GetClaims(c)
-
 	var req EditRequest
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 	}
-
 	msg, err := h.service.Edit(c.Context(), c.Params("id"), claims.UserID, req.Content)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -75,20 +88,17 @@ func (h *Handler) edit(c *fiber.Ctx) error {
 		}
 		return fiber.NewError(fiber.StatusInternalServerError, "could not edit message")
 	}
-
 	return c.JSON(msg)
 }
 
 // DELETE /messages/:id
 func (h *Handler) delete(c *fiber.Ctx) error {
 	claims := auth.GetClaims(c)
-
 	if err := h.service.Delete(c.Context(), c.Params("id"), claims.UserID); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return fiber.NewError(fiber.StatusNotFound, "message not found")
 		}
 		return fiber.NewError(fiber.StatusInternalServerError, "could not delete message")
 	}
-
 	return c.SendStatus(fiber.StatusNoContent)
 }

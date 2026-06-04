@@ -8,9 +8,9 @@ import {
   ReactNode,
 } from "react";
 import { useMessageStore } from "../store/messageStore";
-import { Message } from "../api/message";
 import { useAuthStore } from "../store/authStore";
 import { useWorkspaceStore } from "../store/workspaceStore";
+import { Message } from "../api/message";
 
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8080";
 
@@ -54,11 +54,20 @@ export function WSProvider({
       switch (event.type) {
         case "message.new": {
           const msg = event.payload as Message;
-          // Deduplicate
           const existing =
             useMessageStore.getState().messages[msg.channel_id] ?? [];
           if (existing.some((m) => m.id === msg.id)) break;
           addMessage(msg.channel_id, msg);
+
+          // Increment unread if this isn't the active channel
+          const activeChannel = useWorkspaceStore.getState().activeChannel;
+          if (activeChannel?.id !== msg.channel_id) {
+            const current =
+              useWorkspaceStore.getState().unreadCounts[msg.channel_id] ?? 0;
+            useWorkspaceStore
+              .getState()
+              .setUnreadCount(msg.channel_id, current + 1);
+          }
           break;
         }
         case "typing.indicator": {
@@ -110,7 +119,6 @@ export function WSProvider({
       console.log("ws: connected");
       isConnecting.current = false;
       reconnectDelay.current = 1000;
-      // Rejoin all subscribed channels
       subscribedChannels.current.forEach((channelId) => {
         ws.send(
           JSON.stringify({
@@ -155,7 +163,6 @@ export function WSProvider({
     return () => clearInterval(interval);
   }, []);
 
-  // Connect once on mount
   useEffect(() => {
     connect();
     return () => {

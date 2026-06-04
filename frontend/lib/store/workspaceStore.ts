@@ -8,6 +8,7 @@ interface WorkspaceState {
   channels: Channel[];
   activeChannel: Channel | null;
   onlineUsers: string[];
+  unreadCounts: Record<string, number>; // channelId → unread count
 
   setWorkspaces: (workspaces: Workspace[]) => void;
   setActiveWorkspace: (workspace: Workspace) => void;
@@ -15,6 +16,8 @@ interface WorkspaceState {
   setActiveChannel: (channel: Channel | null) => void;
   setOnlineUsers: (userIds: string[]) => void;
   addChannel: (channel: Channel) => void;
+  setUnreadCount: (channelId: string, count: number) => void;
+  clearUnread: (channelId: string) => void;
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({
@@ -23,6 +26,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   channels: [],
   activeChannel: null,
   onlineUsers: [],
+  unreadCounts: {},
 
   setWorkspaces: (workspaces) => set({ workspaces }),
   setActiveWorkspace: (workspace) => set({ activeWorkspace: workspace }),
@@ -31,4 +35,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   setOnlineUsers: (userIds) => set({ onlineUsers: userIds }),
   addChannel: (channel) =>
     set((state) => ({ channels: [...state.channels, channel] })),
+  setUnreadCount: (channelId, count) =>
+    set((state) => ({
+      unreadCounts: { ...state.unreadCounts, [channelId]: count },
+    })),
+  clearUnread: (channelId) =>
+    set((state) => ({
+      unreadCounts: { ...state.unreadCounts, [channelId]: 0 },
+    })),
 }));
