@@ -6,6 +6,7 @@ import { useAuthStore } from "../../lib/store/authStore";
 import { messageApi, Message } from "../../lib/api/message";
 import MessageItem from "./MessageItem";
 import ThreadDrawer from "../threads/ThreadDrawer";
+import { MessageListSkeleton } from "../ui/Skeleton";
 import {
   dayDivider,
   isSameDay,
@@ -31,7 +32,6 @@ export default function MessageList({ channelId }: Props) {
   const channelMessages = messages[channelId] ?? [];
   const typing = typingUsers[channelId] ?? [];
 
-  // Initial fetch
   useEffect(() => {
     setInitialLoad(true);
     setHasMore(true);
@@ -44,7 +44,6 @@ export default function MessageList({ channelId }: Props) {
     });
   }, [channelId]);
 
-  // Scroll to bottom on new messages
   useEffect(() => {
     if (!initialLoad && channelMessages.length > 0) {
       setTimeout(() => {
@@ -56,7 +55,6 @@ export default function MessageList({ channelId }: Props) {
     }
   }, [channelMessages.length, initialLoad]);
 
-  // Load older messages when scrolling to top
   const loadMore = useCallback(async () => {
     if (!hasMore || loadingMore || !nextCursor) return;
     setLoadingMore(true);
@@ -70,15 +68,15 @@ export default function MessageList({ channelId }: Props) {
     }
   }, [channelId, hasMore, loadingMore, nextCursor]);
 
+  // Show skeleton while loading
   if (initialLoad) {
     return (
-      <div className="flex flex-1 items-center justify-center">
-        <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--accent)]" />
+      <div className="flex flex-1 overflow-hidden">
+        <MessageListSkeleton />
       </div>
     );
   }
 
-  // Build render items including day dividers
   type RenderItem =
     | { kind: "divider"; date: string; key: string }
     | { kind: "message"; message: Message; isGrouped: boolean; key: string };
@@ -89,7 +87,6 @@ export default function MessageList({ channelId }: Props) {
     const showDivider = !prev || !isSameDay(prev.created_at, msg.created_at);
     const isGrouped =
       !!prev && !showDivider && isSameAuthorWithinMinutes(prev, msg);
-
     if (showDivider) {
       items.push({
         kind: "divider",
@@ -100,7 +97,6 @@ export default function MessageList({ channelId }: Props) {
     items.push({ kind: "message", message: msg, isGrouped, key: msg.id });
   });
 
-  // Add typing indicator as last item
   const totalCount = items.length + (typing.length > 0 ? 1 : 0);
 
   return (
@@ -110,7 +106,7 @@ export default function MessageList({ channelId }: Props) {
           ref={virtuosoRef}
           style={{ flex: 1 }}
           totalCount={totalCount}
-          initialTopMostItemIndex={items.length - 1}
+          initialTopMostItemIndex={Math.max(0, items.length - 1)}
           startReached={loadMore}
           components={{
             Header: () => (
@@ -130,7 +126,6 @@ export default function MessageList({ channelId }: Props) {
             ),
           }}
           itemContent={(index) => {
-            // Typing indicator
             if (index === items.length && typing.length > 0) {
               return (
                 <div className="flex items-center gap-2 px-6 py-2">
@@ -178,7 +173,6 @@ export default function MessageList({ channelId }: Props) {
         />
       </div>
 
-      {/* Thread drawer */}
       <ThreadDrawer
         parentMessage={threadMessage}
         onClose={() => setThreadMessage(null)}
