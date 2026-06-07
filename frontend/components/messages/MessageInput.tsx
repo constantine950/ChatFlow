@@ -1,5 +1,6 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
+import { useWS } from "../../lib/hooks/WSContext";
 
 interface Props {
   channelId: string;
@@ -19,8 +20,8 @@ export default function MessageInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout>>();
   const isTyping = useRef(false);
+  const { connected } = useWS();
 
-  // Auto-resize textarea
   function resize() {
     const el = textareaRef.current;
     if (!el) return;
@@ -31,8 +32,6 @@ export default function MessageInput({
   function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     setValue(e.target.value);
     resize();
-
-    // Typing indicator — debounced
     if (!isTyping.current) {
       isTyping.current = true;
       onTyping();
@@ -52,18 +51,14 @@ export default function MessageInput({
 
   function submit() {
     const content = value.trim();
-    if (!content) return;
+    if (!content || !connected) return;
     onSend(content);
     setValue("");
-    // Reset height
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-    }
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
     isTyping.current = false;
     clearTimeout(typingTimer.current);
   }
 
-  // Focus on channel change
   useEffect(() => {
     textareaRef.current?.focus();
     setValue("");
@@ -75,9 +70,11 @@ export default function MessageInput({
         className={`flex items-end gap-3 rounded-xl border bg-[var(--bg-secondary)]
                     px-4 py-3 transition-colors
                     ${
-                      isFocused
-                        ? "border-[var(--accent)] ring-2 ring-[var(--accent-dim)]"
-                        : "border-[var(--border)]"
+                      !connected
+                        ? "border-yellow-500/30 opacity-60"
+                        : isFocused
+                          ? "border-[var(--accent)] ring-2 ring-[var(--accent-dim)]"
+                          : "border-[var(--border)]"
                     }`}
       >
         <textarea
@@ -87,21 +84,24 @@ export default function MessageInput({
           onKeyDown={handleKeyDown}
           onFocus={() => setIsFocused(true)}
           onBlur={() => setIsFocused(false)}
-          placeholder={`Message #${channelName}`}
+          disabled={!connected}
+          placeholder={
+            connected ? `Message #${channelName}` : "Reconnecting..."
+          }
           rows={1}
           className="flex-1 resize-none bg-transparent text-sm text-[var(--text-primary)]
-                     outline-none placeholder:text-[var(--text-muted)] leading-relaxed"
+                     outline-none placeholder:text-[var(--text-muted)] leading-relaxed
+                     disabled:cursor-not-allowed"
           style={{ maxHeight: "200px" }}
         />
 
-        {/* Send button */}
         <button
           onClick={submit}
-          disabled={!value.trim()}
+          disabled={!value.trim() || !connected}
           className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg
                       transition-all
                       ${
-                        value.trim()
+                        value.trim() && connected
                           ? "bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)]"
                           : "bg-[var(--bg-tertiary)] text-[var(--text-muted)] cursor-not-allowed"
                       }`}
@@ -121,15 +121,21 @@ export default function MessageInput({
       </div>
 
       <p className="mt-1.5 px-1 text-[11px] text-[var(--text-muted)]">
-        <kbd className="rounded bg-[var(--bg-tertiary)] px-1 py-0.5 text-[10px]">
-          Enter
-        </kbd>{" "}
-        to send
-        {" · "}
-        <kbd className="rounded bg-[var(--bg-tertiary)] px-1 py-0.5 text-[10px]">
-          Shift+Enter
-        </kbd>{" "}
-        for newline
+        {connected ? (
+          <>
+            <kbd className="rounded bg-[var(--bg-tertiary)] px-1 py-0.5 text-[10px]">
+              Enter
+            </kbd>{" "}
+            to send
+            {" · "}
+            <kbd className="rounded bg-[var(--bg-tertiary)] px-1 py-0.5 text-[10px]">
+              Shift+Enter
+            </kbd>{" "}
+            for newline
+          </>
+        ) : (
+          <span className="text-yellow-400/70">Waiting for connection...</span>
+        )}
       </p>
     </div>
   );

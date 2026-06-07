@@ -5,12 +5,14 @@ import {
   useRef,
   useEffect,
   useCallback,
+  useState,
   ReactNode,
 } from "react";
 import { useMessageStore } from "../store/messageStore";
-import { useAuthStore } from "../store/authStore";
 import { useWorkspaceStore } from "../store/workspaceStore";
+import { useAuthStore } from "../store/authStore";
 import { Message } from "../api/message";
+import { toast } from "@/components/ui/Toast";
 
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8080";
 
@@ -22,12 +24,14 @@ interface WSContextValue {
     parentMessageId?: string,
   ) => void;
   sendTyping: (channelId: string) => void;
+  connected: boolean;
 }
 
 const WSContext = createContext<WSContextValue>({
   joinChannel: () => {},
   sendMessage: () => {},
   sendTyping: () => {},
+  connected: false,
 });
 
 export function useWS() {
@@ -46,6 +50,7 @@ export function WSProvider({
   const reconnectDelay = useRef(1000);
   const subscribedChannels = useRef<Set<string>>(new Set());
   const isConnecting = useRef(false);
+  const [connected, setConnected] = useState(false);
 
   const { addMessage, setTyping, clearTyping } = useMessageStore();
 
@@ -58,8 +63,6 @@ export function WSProvider({
             useMessageStore.getState().messages[msg.channel_id] ?? [];
           if (existing.some((m) => m.id === msg.id)) break;
           addMessage(msg.channel_id, msg);
-
-          // Increment unread if this isn't the active channel
           const activeChannel = useWorkspaceStore.getState().activeChannel;
           if (activeChannel?.id !== msg.channel_id) {
             const current =
@@ -111,14 +114,14 @@ export function WSProvider({
 
     isConnecting.current = true;
     const url = `${WS_BASE}/ws?token=${token}&workspace_id=${workspaceId}`;
-    console.log("ws: connecting...");
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      console.log("ws: connected");
       isConnecting.current = false;
       reconnectDelay.current = 1000;
+      setConnected(true);
+      // Rejoin all subscribed channels
       subscribedChannels.current.forEach((channelId) => {
         ws.send(
           JSON.stringify({
@@ -139,7 +142,7 @@ export function WSProvider({
 
     ws.onclose = () => {
       isConnecting.current = false;
-      console.log("ws: disconnected, reconnecting...");
+      setConnected(false);
       reconnectTimer.current = setTimeout(() => {
         reconnectDelay.current = Math.min(reconnectDelay.current * 2, 30000);
         connect();
@@ -148,6 +151,7 @@ export function WSProvider({
 
     ws.onerror = () => {
       isConnecting.current = false;
+      setConnected(false);
     };
   }, [workspaceId, handleEvent]);
 
@@ -187,9 +191,14 @@ export function WSProvider({
       ws.addEventListener("open", send, { once: true });
   }, []);
 
+  // Optimistic send — add message to store immediately, send via WS
   const sendMessage = useCallback(
     (channelId: string, content: string, parentMessageId?: string) => {
-      if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+      if (wsRef.current?.readyState !== WebSocket.OPEN) {
+        toast.error("Not connected — message not sent");
+        return;
+      }
+
       wsRef.current.send(
         JSON.stringify({
           type: "message.send",
@@ -215,7 +224,9 @@ export function WSProvider({
   }, []);
 
   return (
-    <WSContext.Provider value={{ joinChannel, sendMessage, sendTyping }}>
+    <WSContext.Provider
+      value={{ joinChannel, sendMessage, sendTyping, connected }}
+    >
       {children}
     </WSContext.Provider>
   );

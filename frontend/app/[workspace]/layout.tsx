@@ -4,8 +4,37 @@ import { useRouter, useParams } from "next/navigation";
 import { workspaceApi, channelApi } from "../../lib/api/workspace";
 import { useWorkspaceStore } from "../../lib/store/workspaceStore";
 import { useAuthStore } from "../../lib/store/authStore";
-import { WSProvider } from "../../lib/hooks/WSContext";
+import { WSProvider, useWS } from "../../lib/hooks/WSContext";
 import Sidebar from "../../components/layout/Sidebar";
+import { ToastContainer } from "../../components/ui/Toast";
+
+// Inner layout — has access to WSContext
+function WorkspaceInner({ children }: { children: React.ReactNode }) {
+  const { connected } = useWS();
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-[var(--bg-primary)]">
+      <Sidebar />
+      <div className="flex flex-1 flex-col overflow-hidden">
+        {/* Reconnecting banner */}
+        {!connected && (
+          <div
+            className="flex items-center justify-center gap-2 bg-yellow-500/10
+                          border-b border-yellow-500/20 py-1.5 text-xs text-yellow-400"
+          >
+            <div
+              className="h-3 w-3 animate-spin rounded-full border-2
+                            border-yellow-400/30 border-t-yellow-400"
+            />
+            Reconnecting to server...
+          </div>
+        )}
+        <main className="flex flex-1 flex-col overflow-hidden">{children}</main>
+      </div>
+      <ToastContainer />
+    </div>
+  );
+}
 
 export default function WorkspaceLayout({
   children,
@@ -20,6 +49,7 @@ export default function WorkspaceLayout({
   const { setWorkspaces, setActiveWorkspace, activeWorkspace, setChannels } =
     useWorkspaceStore();
 
+  // Step 1 — rehydrate auth from localStorage
   useEffect(() => {
     const token = localStorage.getItem("access_token");
     const refresh = localStorage.getItem("refresh_token");
@@ -48,6 +78,7 @@ export default function WorkspaceLayout({
     setReady(true);
   }, []);
 
+  // Step 2 — load workspaces
   useEffect(() => {
     if (!ready) return;
     workspaceApi
@@ -60,6 +91,7 @@ export default function WorkspaceLayout({
       .catch(() => router.replace("/login"));
   }, [ready, slug]);
 
+  // Step 3 — load channels
   useEffect(() => {
     if (!activeWorkspace) return;
     channelApi.list(activeWorkspace.id).then(({ data }) => setChannels(data));
@@ -68,17 +100,17 @@ export default function WorkspaceLayout({
   if (!ready || !activeWorkspace) {
     return (
       <div className="flex h-screen items-center justify-center">
-        <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--accent)]" />
+        <div
+          className="h-5 w-5 animate-spin rounded-full border-2
+                        border-[var(--border)] border-t-[var(--accent)]"
+        />
       </div>
     );
   }
 
   return (
     <WSProvider workspaceId={activeWorkspace.id}>
-      <div className="flex h-screen overflow-hidden bg-[var(--bg-primary)]">
-        <Sidebar />
-        <main className="flex flex-1 flex-col overflow-hidden">{children}</main>
-      </div>
+      <WorkspaceInner>{children}</WorkspaceInner>
     </WSProvider>
   );
 }
