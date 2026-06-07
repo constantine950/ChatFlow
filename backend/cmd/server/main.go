@@ -57,8 +57,9 @@ func main() {
 	authService := auth.NewService(authRepo, redisClient, cfg.JWTSecret)
 	authHandler := auth.NewHandler(authService)
 
+	// Workspace service now gets Redis for member caching
 	wsRepo    := workspace.NewRepository(db)
-	wsService := workspace.NewService(wsRepo)
+	wsService := workspace.NewService(wsRepo, redisClient)
 	wsHandler := workspace.NewHandler(wsService)
 
 	chRepo    := channel.NewRepository(db)
@@ -104,7 +105,6 @@ func main() {
 		if msg.ParentMessageID != "" {
 			parentID = &msg.ParentMessageID
 		}
-
 		saved, err := msgRepo.Insert(ctx, message.InsertParams{
 			ID:              msg.ID,
 			ChannelID:       msg.ChannelID,
@@ -115,7 +115,6 @@ func main() {
 		if err != nil {
 			return err
 		}
-
 		hub.BroadcastToChannel(saved.ChannelID, ws.Event{
 			Type: ws.EventMessageNew,
 			Payload: ws.MessageNewPayload{
@@ -127,7 +126,6 @@ func main() {
 				CreatedAt:   saved.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 			},
 		})
-
 		return nil
 	})
 
@@ -152,13 +150,13 @@ func main() {
 	})
 
 	app.Use(recover.New())
-	app.Use(cors.New(cors.Config{
-    AllowOrigins:     "http://localhost:3000",
-    AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-    AllowHeaders:     "Origin,Content-Type,Authorization",
-    AllowCredentials: true,
-}))
 	app.Use(logger.New())
+	app.Use(cors.New(cors.Config{
+		AllowOrigins:     "http://localhost:3000",
+		AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+		AllowHeaders:     "Origin,Content-Type,Authorization",
+		AllowCredentials: true,
+	}))
 
 	// ── Routes ────────────────────────────────────────────────
 	app.Get("/health", func(c *fiber.Ctx) error {

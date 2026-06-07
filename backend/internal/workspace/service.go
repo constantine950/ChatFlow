@@ -2,44 +2,44 @@ package workspace
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
+	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 var slugRegex = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
+const memberCacheTTL = 5 * time.Minute
+
 type Service struct {
-	repo *Repository
+	repo  *Repository
+	redis *redis.Client
 }
 
-func NewService(repo *Repository) *Service {
-	return &Service{repo: repo}
+func NewService(repo *Repository, redis *redis.Client) *Service {
+	return &Service{repo: repo, redis: redis}
 }
 
-// Create makes a new workspace and adds the creator as OWNER.
 func (s *Service) Create(ctx context.Context, req CreateRequest, ownerID string) (*Response, error) {
 	if err := validateCreate(req); err != nil {
 		return nil, err
 	}
-
-	// Normalise slug — lowercase, trim spaces
 	req.Slug = strings.ToLower(strings.TrimSpace(req.Slug))
-
 	ws, err := s.repo.Create(ctx, req.Name, req.Slug, ownerID)
 	if err != nil {
 		return nil, err
 	}
-
-	// Add creator as OWNER member
 	if err := s.repo.AddMember(ctx, ws.ID, ownerID, "OWNER"); err != nil {
 		return nil, err
 	}
-
 	return toResponse(ws), nil
 }
 
-// Get returns a workspace — only if the requesting user is a member.
 func (s *Service) Get(ctx context.Context, workspaceID, userID string) (*Response, error) {
 	ok, err := s.repo.IsMember(ctx, workspaceID, userID)
 	if err != nil {
@@ -48,7 +48,6 @@ func (s *Service) Get(ctx context.Context, workspaceID, userID string) (*Respons
 	if !ok {
 		return nil, ErrNotMember
 	}
-
 	ws, err := s.repo.FindByID(ctx, workspaceID)
 	if err != nil {
 		return nil, err
@@ -56,13 +55,11 @@ func (s *Service) Get(ctx context.Context, workspaceID, userID string) (*Respons
 	return toResponse(ws), nil
 }
 
-// List returns all workspaces the user belongs to.
 func (s *Service) List(ctx context.Context, userID string) ([]*Response, error) {
 	workspaces, err := s.repo.ListByUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-
 	resp := make([]*Response, len(workspaces))
 	for i, ws := range workspaces {
 		resp[i] = toResponse(ws)
@@ -70,21 +67,27 @@ func (s *Service) List(ctx context.Context, userID string) ([]*Response, error) 
 	return resp, nil
 }
 
-// Join adds a user to a workspace as MEMBER.
 func (s *Service) Join(ctx context.Context, workspaceID, userID string) error {
-	// Verify workspace exists
 	if _, err := s.repo.FindByID(ctx, workspaceID); err != nil {
 		return err
 	}
-	return s.repo.AddMember(ctx, workspaceID, userID, "MEMBER")
+	if err := s.repo.AddMember(ctx, workspaceID, userID, "MEMBER"); err != nil {
+		return err
+	}
+	// Invalidate member cache
+	s.redis.Del(ctx, memberCacheKey(workspaceID))
+	return nil
 }
 
-// Leave removes a user from a workspace.
 func (s *Service) Leave(ctx context.Context, workspaceID, userID string) error {
-	return s.repo.RemoveMember(ctx, workspaceID, userID)
+	if err := s.repo.RemoveMember(ctx, workspaceID, userID); err != nil {
+		return err
+	}
+	s.redis.Del(ctx, memberCacheKey(workspaceID))
+	return nil
 }
 
-// ListMembers returns all members — only for existing members.
+// ListMembers returns members with Redis caching.
 func (s *Service) ListMembers(ctx context.Context, workspaceID, userID string) ([]*MemberResponse, error) {
 	ok, err := s.repo.IsMember(ctx, workspaceID, userID)
 	if err != nil {
@@ -94,6 +97,17 @@ func (s *Service) ListMembers(ctx context.Context, workspaceID, userID string) (
 		return nil, ErrNotMember
 	}
 
+	cacheKey := memberCacheKey(workspaceID)
+
+	// Try cache first
+	if cached, err := s.redis.Get(ctx, cacheKey).Result(); err == nil {
+		var members []*MemberResponse
+		if json.Unmarshal([]byte(cached), &members) == nil {
+			return members, nil
+		}
+	}
+
+	// Cache miss — query DB
 	members, err := s.repo.ListMembers(ctx, workspaceID)
 	if err != nil {
 		return nil, err
@@ -109,10 +123,18 @@ func (s *Service) ListMembers(ctx context.Context, workspaceID, userID string) (
 			JoinedAt:    m.JoinedAt,
 		}
 	}
+
+	// Store in cache
+	if data, err := json.Marshal(resp); err == nil {
+		s.redis.Set(ctx, cacheKey, data, memberCacheTTL)
+	}
+
 	return resp, nil
 }
 
-// ── Helpers ───────────────────────────────────────────────────
+func memberCacheKey(workspaceID string) string {
+	return fmt.Sprintf("members:%s", workspaceID)
+}
 
 func validateCreate(req CreateRequest) error {
 	if strings.TrimSpace(req.Name) == "" {
