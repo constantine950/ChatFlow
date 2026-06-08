@@ -1,7 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Proxy API calls to the Go backend in development
-  // so we avoid CORS issues when running locally
+  // Required for Docker standalone output
+  output: "standalone",
+
   async rewrites() {
     return [
       {
