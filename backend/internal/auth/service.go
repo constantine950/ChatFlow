@@ -124,7 +124,7 @@ func (s *Service) ValidateAccessToken(tokenStr string) (*Claims, error) {
 	}, nil
 }
 
-// ── Private helpers ───────────────────────────────────────────
+// Private helpers
 
 func (s *Service) buildAuthResponse(ctx context.Context, user *User) (*AuthResponse, error) {
 	accessToken, err := s.generateAccessToken(user)

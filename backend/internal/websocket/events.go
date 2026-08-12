@@ -21,14 +21,14 @@ const (
 	EventError           = "error"
 )
 
-// ── Envelope ──────────────────────────────────────────────────
+// Envelope 
 
 type Event struct {
 	Type    string      `json:"type"`
 	Payload interface{} `json:"payload"`
 }
 
-// ── Client → Server payloads ──────────────────────────────────
+// Client → Server payloads
 
 type MessageSendPayload struct {
 	ChannelID       string `json:"channel_id"`
@@ -44,7 +44,7 @@ type ChannelPayload struct {
 	ChannelID string `json:"channel_id"`
 }
 
-// ── Server → Client payloads ──────────────────────────────────
+// Server → Client payloads
 
 type MessageNewPayload struct {
 	ID              string  `json:"id"`

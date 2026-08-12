@@ -1,6 +1,3 @@
-// lib/api/client.ts
-// Base fetch wrapper — handles auth headers, JSON parsing, token refresh
-
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080/api/v1";
 

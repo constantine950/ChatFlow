@@ -27,7 +27,7 @@ import (
 func main() {
 	cfg := config.Load()
 
-	// ── Database ──────────────────────────────────────────────
+	// Database
 	db, err := database.Connect(cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("database: failed to connect: %v", err)
@@ -35,7 +35,7 @@ func main() {
 	defer db.Close()
 	log.Println("database: connected")
 
-	// ── Redis ─────────────────────────────────────────────────
+	// Redis
 	redisClient, err := cache.Connect(cfg.RedisURL)
 	if err != nil {
 		log.Fatalf("redis: failed to connect: %v", err)
@@ -43,7 +43,7 @@ func main() {
 	defer redisClient.Close()
 	log.Println("redis: connected")
 
-	// ── Kafka ─────────────────────────────────────────────────
+	// Kafka
 	brokers := strings.Split(cfg.KafkaBrokers, ",")
 	if err := kafka.EnsureTopics(brokers); err != nil {
 		log.Printf("kafka: could not ensure topics: %v", err)
@@ -52,7 +52,7 @@ func main() {
 	defer producer.Close()
 	log.Println("kafka: producer ready")
 
-	// ── Wire layers ───────────────────────────────────────────
+	//  Wire layers
 	authRepo    := auth.NewRepository(db)
 	authService := auth.NewService(authRepo, redisClient, cfg.JWTSecret)
 	authHandler := auth.NewHandler(authService)
@@ -80,7 +80,7 @@ func main() {
 	searchService := search.NewService(db)
 	searchHandler := search.NewHandler(searchService)
 
-	// ── WebSocket hub ─────────────────────────────────────────
+	// WebSocket hub
 	hub := ws.NewHub(producer, presenceSvc, typingSvc)
 	go hub.Run()
 
@@ -88,7 +88,7 @@ func main() {
 	defer cancelTyping()
 	go hub.StartTypingSubscriber(typingCtx)
 
-	// ── Reactions handler ─────────────────────────────────────
+	//  Reactions handler
 	rxHandler := message.NewReactionsHandler(rxService, func(channelID, messageID string, summaries []*message.ReactionSummary) {
 		hub.BroadcastToChannel(channelID, ws.Event{
 			Type: ws.EventReactionUpdate,
@@ -99,7 +99,7 @@ func main() {
 		})
 	})
 
-	// ── Kafka consumer ────────────────────────────────────────
+	//  Kafka consumer 
 	consumer := kafka.NewConsumer(brokers, func(ctx context.Context, msg kafka.ChatMessage) error {
 		var parentID *string
 		if msg.ParentMessageID != "" {
@@ -135,7 +135,7 @@ func main() {
 	defer consumer.Close()
 	log.Println("kafka: consumer started")
 
-	// ── Fiber ─────────────────────────────────────────────────
+	// Fiber
 	app := fiber.New(fiber.Config{
 		AppName: "ChatFlow API v1",
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
@@ -158,7 +158,7 @@ func main() {
 		AllowCredentials: true,
 	}))
 
-	// ── Routes ────────────────────────────────────────────────
+	//  Routes 
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok", "service": "chatflow-api"})
 	})

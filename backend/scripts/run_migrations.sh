@@ -1,14 +1,3 @@
-#!/usr/bin/env bash
-# =============================================================
-#  run_migrations.sh
-#  Runs golang-migrate against the Postgres container.
-#
-#  Usage:
-#    ./scripts/run_migrations.sh up        apply all pending migrations
-#    ./scripts/run_migrations.sh down 1    roll back 1 migration
-#    ./scripts/run_migrations.sh version   show current version
-# =============================================================
-
 set -euo pipefail
 
 # Load .env from the project root (one level up from /scripts)

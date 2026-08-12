@@ -1,4 +1,3 @@
-// lib/api/workspace.ts
 import { api } from "./client";
 
 export interface Workspace {

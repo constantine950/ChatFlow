@@ -11,7 +11,6 @@ CREATE TABLE workspaces (
 CREATE INDEX idx_workspaces_slug     ON workspaces (slug);
 CREATE INDEX idx_workspaces_owner_id ON workspaces (owner_id);
 
--- ─────────────────────────────────────────────
 CREATE TABLE workspace_members (
     workspace_id UUID NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
     user_id      UUID NOT NULL REFERENCES users (id)      ON DELETE CASCADE,

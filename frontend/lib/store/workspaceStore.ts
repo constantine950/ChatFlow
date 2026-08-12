@@ -1,4 +1,3 @@
-// lib/store/workspaceStore.ts
 import { create } from "zustand";
 import { Workspace, Channel } from "../api/workspace";
 
@@ -8,7 +7,7 @@ interface WorkspaceState {
   channels: Channel[];
   activeChannel: Channel | null;
   onlineUsers: string[];
-  unreadCounts: Record<string, number>; // channelId → unread count
+  unreadCounts: Record<string, number>;
 
   setWorkspaces: (workspaces: Workspace[]) => void;
   setActiveWorkspace: (workspace: Workspace) => void;

@@ -85,7 +85,7 @@ func (s *Service) Delete(ctx context.Context, messageID, userID string) error {
 	return s.repo.SoftDelete(ctx, messageID, userID)
 }
 
-// ── Helper ────────────────────────────────────────────────────
+//  Helper
 
 func toResponse(m *Message) *Response {
 	return &Response{

@@ -18,7 +18,7 @@ CREATE TABLE channels (
 CREATE INDEX idx_channels_workspace_id ON channels (workspace_id);
 CREATE INDEX idx_channels_created_by   ON channels (created_by);
 
--- ─────────────────────────────────────────────
+
 CREATE TABLE channel_members (
     channel_id   UUID        NOT NULL REFERENCES channels (id) ON DELETE CASCADE,
     user_id      UUID        NOT NULL REFERENCES users (id)    ON DELETE CASCADE,

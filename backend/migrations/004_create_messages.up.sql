@@ -14,7 +14,6 @@ CREATE TABLE messages (
     search_vector     TSVECTOR
 );
 
--- ── Indexes ───────────────────────────────────
 
 -- Primary pagination index: newest messages first within a channel
 CREATE INDEX idx_messages_channel_created
@@ -34,7 +33,7 @@ CREATE INDEX idx_messages_not_deleted
 CREATE INDEX idx_messages_search
     ON messages USING GIN (search_vector);
 
--- ── Full-text search trigger ──────────────────
+-- ── Full-text search trigger
 -- Keeps search_vector in sync whenever content changes.
 -- Uses English stemming (you can change to 'simple' if multilingual).
 
@@ -51,7 +50,7 @@ CREATE TRIGGER messages_search_vector_trigger
     ON messages
     FOR EACH ROW EXECUTE FUNCTION messages_search_vector_update();
 
--- ── File attachments ──────────────────────────
+-- ── File attachments
 CREATE TABLE file_attachments (
     id          UUID   PRIMARY KEY DEFAULT uuid_generate_v4(),
     message_id  UUID   NOT NULL REFERENCES messages (id) ON DELETE CASCADE,

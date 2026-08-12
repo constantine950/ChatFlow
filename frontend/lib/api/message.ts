@@ -1,4 +1,3 @@
-// lib/api/message.ts
 import { api } from "./client";
 
 export interface Message {

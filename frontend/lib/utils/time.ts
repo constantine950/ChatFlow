@@ -1,4 +1,3 @@
-// lib/utils/time.ts
 import { formatDistanceToNow, format, isToday, isYesterday } from "date-fns";
 
 export function relativeTime(dateStr: string): string {

@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ── Models ────────────────────────────────────────────────────
+// Models
 
 type Message struct {
 	ID              string     `db:"id"`

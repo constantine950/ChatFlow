@@ -1,4 +1,3 @@
-// lib/store/messageStore.ts
 import { create } from "zustand";
 import { Message } from "../api/message";
 
@@ -8,8 +7,8 @@ interface TypingUser {
 }
 
 interface MessageState {
-  messages: Record<string, Message[]>; // channelId → messages
-  typingUsers: Record<string, TypingUser[]>; // channelId → typing users
+  messages: Record<string, Message[]>;
+  typingUsers: Record<string, TypingUser[]>;
 
   setMessages: (channelId: string, messages: Message[]) => void;
   prependMessages: (channelId: string, messages: Message[]) => void;
