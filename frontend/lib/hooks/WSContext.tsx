@@ -10,9 +10,10 @@ import {
 } from "react";
 import { useMessageStore } from "../store/messageStore";
 import { useWorkspaceStore } from "../store/workspaceStore";
-import { useAuthStore } from "../store/authStore";
-import { Message } from "../api/message";
 import { toast } from "@/components/ui/Toast";
+import { useAuthStore } from "../store/authStore";
+import { Channel } from "../api/workspace";
+import { Message } from "../api/message";
 
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8080";
 
@@ -61,7 +62,7 @@ export function WSProvider({
           const msg = event.payload as Message;
           const existing =
             useMessageStore.getState().messages[msg.channel_id] ?? [];
-          if (existing.some((m) => m.id === msg.id)) break;
+          if (existing.some((m: any) => m.id === msg.id)) break;
           addMessage(msg.channel_id, msg);
           const activeChannel = useWorkspaceStore.getState().activeChannel;
           if (activeChannel?.id !== msg.channel_id) {
@@ -73,6 +74,28 @@ export function WSProvider({
           }
           break;
         }
+
+        case "channel.created": {
+          // Another user created a channel — add it to the sidebar instantly
+          const ch = event.payload as Channel & { created_at: string };
+          const existing = useWorkspaceStore.getState().channels;
+          if (existing.some((c: any) => c.id === ch.id)) break;
+          useWorkspaceStore.getState().addChannel({
+            id: ch.id,
+            workspace_id: ch.workspace_id || workspaceId,
+            name: ch.name,
+            topic: ch.topic || null,
+            is_private: ch.is_private,
+            is_dm: false,
+            created_by: ch.created_by,
+            created_at: ch.created_at,
+          });
+          if (!ch.is_private) {
+            toast.info(`#${ch.name} channel was created`);
+          }
+          break;
+        }
+
         case "typing.indicator": {
           const { channel_id, user_id, display_name } = event.payload;
           const me = useAuthStore.getState().user;
@@ -81,11 +104,13 @@ export function WSProvider({
           setTimeout(() => clearTyping(channel_id, user_id), 4000);
           break;
         }
+
         case "typing.stop": {
           const { channel_id, user_id } = event.payload;
           clearTyping(channel_id, user_id);
           break;
         }
+
         case "presence.update": {
           const { user_id, status } = event.payload;
           const current = useWorkspaceStore.getState().onlineUsers;
@@ -96,13 +121,13 @@ export function WSProvider({
           } else {
             useWorkspaceStore
               .getState()
-              .setOnlineUsers(current.filter((id) => id !== user_id));
+              .setOnlineUsers(current.filter((id: any) => id !== user_id));
           }
           break;
         }
       }
     },
-    [addMessage, setTyping, clearTyping],
+    [addMessage, setTyping, clearTyping, workspaceId],
   );
 
   const connect = useCallback(() => {
@@ -121,7 +146,7 @@ export function WSProvider({
       isConnecting.current = false;
       reconnectDelay.current = 1000;
       setConnected(true);
-      // Rejoin all subscribed channels
+      // Rejoin all subscribed channels after reconnect
       subscribedChannels.current.forEach((channelId) => {
         ws.send(
           JSON.stringify({
@@ -130,6 +155,13 @@ export function WSProvider({
           }),
         );
       });
+      // Also subscribe to the workspace itself for channel.created events
+      ws.send(
+        JSON.stringify({
+          type: "channel.join",
+          payload: { channel_id: workspaceId },
+        }),
+      );
     };
 
     ws.onmessage = (e) => {
@@ -191,14 +223,12 @@ export function WSProvider({
       ws.addEventListener("open", send, { once: true });
   }, []);
 
-  // Optimistic send — add message to store immediately, send via WS
   const sendMessage = useCallback(
     (channelId: string, content: string, parentMessageId?: string) => {
       if (wsRef.current?.readyState !== WebSocket.OPEN) {
         toast.error("Not connected — message not sent");
         return;
       }
-
       wsRef.current.send(
         JSON.stringify({
           type: "message.send",

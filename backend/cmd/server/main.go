@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -27,7 +28,7 @@ import (
 func main() {
 	cfg := config.Load()
 
-	// Database
+	// ── Database ──────────────────────────────────────────────
 	db, err := database.Connect(cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("database: failed to connect: %v", err)
@@ -35,7 +36,7 @@ func main() {
 	defer db.Close()
 	log.Println("database: connected")
 
-	// Redis
+	// ── Redis ─────────────────────────────────────────────────
 	redisClient, err := cache.Connect(cfg.RedisURL)
 	if err != nil {
 		log.Fatalf("redis: failed to connect: %v", err)
@@ -43,7 +44,7 @@ func main() {
 	defer redisClient.Close()
 	log.Println("redis: connected")
 
-	// Kafka
+	// ── Kafka ─────────────────────────────────────────────────
 	brokers := strings.Split(cfg.KafkaBrokers, ",")
 	if err := kafka.EnsureTopics(brokers); err != nil {
 		log.Printf("kafka: could not ensure topics: %v", err)
@@ -52,19 +53,14 @@ func main() {
 	defer producer.Close()
 	log.Println("kafka: producer ready")
 
-	//  Wire layers
+	// ── Services ──────────────────────────────────────────────
 	authRepo    := auth.NewRepository(db)
 	authService := auth.NewService(authRepo, redisClient, cfg.JWTSecret)
 	authHandler := auth.NewHandler(authService)
 
-	// Workspace service now gets Redis for member caching
 	wsRepo    := workspace.NewRepository(db)
 	wsService := workspace.NewService(wsRepo, redisClient)
 	wsHandler := workspace.NewHandler(wsService)
-
-	chRepo    := channel.NewRepository(db)
-	chService := channel.NewService(chRepo)
-	chHandler := channel.NewHandler(chService)
 
 	msgRepo    := message.NewRepository(db)
 	msgService := message.NewService(msgRepo)
@@ -80,7 +76,7 @@ func main() {
 	searchService := search.NewService(db)
 	searchHandler := search.NewHandler(searchService)
 
-	// WebSocket hub
+	// ── WebSocket hub ─────────────────────────────────────────
 	hub := ws.NewHub(producer, presenceSvc, typingSvc)
 	go hub.Run()
 
@@ -88,7 +84,27 @@ func main() {
 	defer cancelTyping()
 	go hub.StartTypingSubscriber(typingCtx)
 
-	//  Reactions handler
+	// ── Channel handler — with broadcast on creation ───────────
+	chRepo    := channel.NewRepository(db)
+	chService := channel.NewService(chRepo)
+	chHandler := channel.NewHandler(chService, func(workspaceID, channelID, name, topic string, isPrivate bool, createdBy string, createdAt time.Time) {
+		// Broadcast to all clients subscribed to the workspace ID
+		// so their sidebar updates instantly
+		hub.BroadcastToChannel(workspaceID, ws.Event{
+			Type: ws.EventChannelCreated,
+			Payload: ws.ChannelCreatedPayload{
+				ID:          channelID,
+				WorkspaceID: workspaceID,
+				Name:        name,
+				Topic:       topic,
+				IsPrivate:   isPrivate,
+				CreatedBy:   createdBy,
+				CreatedAt:   createdAt.Format(time.RFC3339),
+			},
+		})
+	})
+
+	// ── Reactions handler ─────────────────────────────────────
 	rxHandler := message.NewReactionsHandler(rxService, func(channelID, messageID string, summaries []*message.ReactionSummary) {
 		hub.BroadcastToChannel(channelID, ws.Event{
 			Type: ws.EventReactionUpdate,
@@ -99,7 +115,7 @@ func main() {
 		})
 	})
 
-	//  Kafka consumer 
+	// ── Kafka consumer ────────────────────────────────────────
 	consumer := kafka.NewConsumer(brokers, func(ctx context.Context, msg kafka.ChatMessage) error {
 		var parentID *string
 		if msg.ParentMessageID != "" {
@@ -135,7 +151,7 @@ func main() {
 	defer consumer.Close()
 	log.Println("kafka: consumer started")
 
-	// Fiber
+	// ── Fiber ─────────────────────────────────────────────────
 	app := fiber.New(fiber.Config{
 		AppName: "ChatFlow API v1",
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
@@ -158,7 +174,7 @@ func main() {
 		AllowCredentials: true,
 	}))
 
-	//  Routes 
+	// ── Routes ────────────────────────────────────────────────
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok", "service": "chatflow-api"})
 	})

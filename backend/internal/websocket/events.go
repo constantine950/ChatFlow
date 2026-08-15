@@ -2,12 +2,12 @@ package websocket
 
 // Client → Server
 const (
-	EventMessageSend       = "message.send"
-	EventTypingStart       = "typing.start"
-	EventTypingStop        = "typing.stop"
-	EventPresenceHeartbeat = "presence.heartbeat"
-	EventChannelJoin       = "channel.join"
-	EventChannelLeave      = "channel.leave"
+	EventMessageSend        = "message.send"
+	EventTypingStart        = "typing.start"
+	EventTypingStop         = "typing.stop"
+	EventPresenceHeartbeat  = "presence.heartbeat"
+	EventChannelJoin        = "channel.join"
+	EventChannelLeave       = "channel.leave"
 )
 
 // Server → Client
@@ -18,10 +18,11 @@ const (
 	EventTypingIndicator = "typing.indicator"
 	EventPresenceUpdate  = "presence.update"
 	EventReactionUpdate  = "reaction.update"
+	EventChannelCreated  = "channel.created"
 	EventError           = "error"
 )
 
-// Envelope 
+// Envelope
 
 type Event struct {
 	Type    string      `json:"type"`
@@ -67,10 +68,21 @@ type PresenceUpdatePayload struct {
 	Status string `json:"status"`
 }
 
-// ReactionUpdatePayload is broadcast when any reaction changes on a message.
 type ReactionUpdatePayload struct {
 	MessageID string      `json:"message_id"`
-	Reactions interface{} `json:"reactions"` // []*message.ReactionSummary
+	Reactions interface{} `json:"reactions"`
+}
+
+// ChannelCreatedPayload is broadcast to all workspace members
+// when a new channel is created.
+type ChannelCreatedPayload struct {
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	Name        string `json:"name"`
+	Topic       string `json:"topic"`
+	IsPrivate   bool   `json:"is_private"`
+	CreatedBy   string `json:"created_by"`
+	CreatedAt   string `json:"created_at"`
 }
 
 type ErrorPayload struct {
