@@ -84,12 +84,10 @@ func main() {
 	defer cancelTyping()
 	go hub.StartTypingSubscriber(typingCtx)
 
-	// ── Channel handler — with broadcast on creation ───────────
+	// ── Channel handler — broadcasts creation to workspace ────
 	chRepo    := channel.NewRepository(db)
 	chService := channel.NewService(chRepo)
 	chHandler := channel.NewHandler(chService, func(workspaceID, channelID, name, topic string, isPrivate bool, createdBy string, createdAt time.Time) {
-		// Broadcast to all clients subscribed to the workspace ID
-		// so their sidebar updates instantly
 		hub.BroadcastToChannel(workspaceID, ws.Event{
 			Type: ws.EventChannelCreated,
 			Payload: ws.ChannelCreatedPayload{
@@ -191,6 +189,39 @@ func main() {
 	authHandler.RegisterRoutes(api.Group("/auth"))
 
 	protected := api.Group("/", authService.Middleware())
+
+	// User search — find registered users to add to workspace
+	protected.Get("/users/search", func(c *fiber.Ctx) error {
+		q := c.Query("q", "")
+		if len(q) < 2 {
+			return c.JSON(fiber.Map{"data": []interface{}{}})
+		}
+		rows, err := db.Query(c.Context(), `
+			SELECT id, email, display_name FROM users
+			WHERE email ILIKE $1 OR display_name ILIKE $1
+			LIMIT 10
+		`, "%"+q+"%")
+		if err != nil {
+			return fiber.NewError(500, "search failed")
+		}
+		defer rows.Close()
+		type UserResult struct {
+			ID          string `json:"id"`
+			Email       string `json:"email"`
+			DisplayName string `json:"display_name"`
+		}
+		var results []UserResult
+		for rows.Next() {
+			var u UserResult
+			rows.Scan(&u.ID, &u.Email, &u.DisplayName)
+			results = append(results, u)
+		}
+		if results == nil {
+			results = []UserResult{}
+		}
+		return c.JSON(fiber.Map{"data": results})
+	})
+
 	wsHandler.RegisterRoutes(protected.Group("/workspaces"))
 	chHandler.RegisterRoutes(
 		protected.Group("/workspaces/:wsID/channels"),

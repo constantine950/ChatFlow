@@ -18,8 +18,8 @@ func NewHandler(service *Service) *Handler {
 // Call this from main.go: auth.RegisterRoutes(api.Group("/auth"))
 func (h *Handler) RegisterRoutes(router fiber.Router) {
 	router.Post("/register", h.register)
-	router.Post("/login", h.login)
-	router.Post("/refresh", h.refresh)
+	router.Post("/login",    h.login)
+	router.Post("/refresh",  h.refresh)
 	router.Delete("/logout", h.logout)
 }
 

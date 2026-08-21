@@ -16,12 +16,12 @@ func NewHandler(service *Service) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(router fiber.Router) {
-	router.Post("/",                       h.create)
-	router.Get("/",                        h.list)
-	router.Get("/:id",                     h.get)
-	router.Post("/:id/members",            h.join)
-	router.Delete("/:id/members/:userID",  h.removeMember)
-	router.Get("/:id/members",             h.listMembers)
+	router.Post("/",                      h.create)
+	router.Get("/",                       h.list)
+	router.Get("/:id",                    h.get)
+	router.Post("/:id/members",           h.join)
+	router.Delete("/:id/members/:userID", h.removeMember)
+	router.Get("/:id/members",            h.listMembers)
 }
 
 // POST /workspaces
@@ -73,7 +73,19 @@ func (h *Handler) get(c *fiber.Ctx) error {
 // POST /workspaces/:id/members
 func (h *Handler) join(c *fiber.Ctx) error {
 	claims := auth.GetClaims(c)
-	if err := h.service.Join(c.Context(), c.Params("id"), claims.UserID); err != nil {
+
+	// Allow adding another user by passing user_id in body
+	var body struct {
+		UserID string `json:"user_id"`
+	}
+	c.BodyParser(&body)
+
+	targetUserID := claims.UserID
+	if body.UserID != "" {
+		targetUserID = body.UserID
+	}
+
+	if err := h.service.Join(c.Context(), c.Params("id"), targetUserID); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return fiber.NewError(fiber.StatusNotFound, "workspace not found")
 		}
