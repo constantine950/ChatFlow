@@ -125,6 +125,18 @@ export function WSProvider({
           }
           break;
         }
+        case "message.updated": {
+          const { id, channel_id, content, edited_at } = event.payload;
+          useMessageStore
+            .getState()
+            .updateMessage(channel_id, { id, content, edited_at });
+          break;
+        }
+        case "message.deleted": {
+          const { id, channel_id } = event.payload;
+          useMessageStore.getState().removeMessage(channel_id, id);
+          break;
+        }
       }
     },
     [addMessage, setTyping, clearTyping, workspaceId],
