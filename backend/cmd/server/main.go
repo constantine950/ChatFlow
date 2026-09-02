@@ -64,7 +64,6 @@ func main() {
 
 	msgRepo    := message.NewRepository(db)
 	msgService := message.NewService(msgRepo)
-	msgHandler := message.NewHandler(msgService)
 
 	rxRepo    := message.NewReactionsRepository(db)
 	rxService := message.NewReactionsService(rxRepo)
@@ -84,7 +83,15 @@ func main() {
 	defer cancelTyping()
 	go hub.StartTypingSubscriber(typingCtx)
 
-	// ── Channel handler — broadcasts creation to workspace ────
+	// ── Message handler — broadcasts edit/delete ──────────────
+	msgHandler := message.NewHandler(msgService, func(eventType string, channelID string, payload interface{}) {
+		hub.BroadcastToChannel(channelID, ws.Event{
+			Type:    eventType,
+			Payload: payload,
+		})
+	})
+
+	// ── Channel handler — broadcasts creation ─────────────────
 	chRepo    := channel.NewRepository(db)
 	chService := channel.NewService(chRepo)
 	chHandler := channel.NewHandler(chService, func(workspaceID, channelID, name, topic string, isPrivate bool, createdBy string, createdAt time.Time) {
@@ -190,7 +197,7 @@ func main() {
 
 	protected := api.Group("/", authService.Middleware())
 
-	// User search — find registered users to add to workspace
+	// User search
 	protected.Get("/users/search", func(c *fiber.Ctx) error {
 		q := c.Query("q", "")
 		if len(q) < 2 {

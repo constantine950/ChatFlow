@@ -9,11 +9,11 @@ import {
   ReactNode,
 } from "react";
 import { useMessageStore } from "../store/messageStore";
-import { useWorkspaceStore } from "../store/workspaceStore";
-import { toast } from "@/components/ui/Toast";
-import { useAuthStore } from "../store/authStore";
-import { Channel } from "../api/workspace";
 import { Message } from "../api/message";
+import { useWorkspaceStore } from "../store/workspaceStore";
+import { Channel } from "../api/workspace";
+import { useAuthStore } from "../store/authStore";
+import { toast } from "@/components/ui/Toast";
 
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8080";
 
@@ -53,7 +53,8 @@ export function WSProvider({
   const isConnecting = useRef(false);
   const [connected, setConnected] = useState(false);
 
-  const { addMessage, setTyping, clearTyping } = useMessageStore();
+  const { addMessage, setTyping, clearTyping, updateMessage, removeMessage } =
+    useMessageStore();
 
   const handleEvent = useCallback(
     (event: { type: string; payload: any }) => {
@@ -75,8 +76,19 @@ export function WSProvider({
           break;
         }
 
+        case "message.updated": {
+          const { id, channel_id, content, edited_at } = event.payload;
+          updateMessage(channel_id, { id, content, edited_at });
+          break;
+        }
+
+        case "message.deleted": {
+          const { id, channel_id } = event.payload;
+          removeMessage(channel_id, id);
+          break;
+        }
+
         case "channel.created": {
-          // Another user created a channel — add it to the sidebar instantly
           const ch = event.payload as Channel & { created_at: string };
           const existing = useWorkspaceStore.getState().channels;
           if (existing.some((c: any) => c.id === ch.id)) break;
@@ -91,7 +103,7 @@ export function WSProvider({
             created_at: ch.created_at,
           });
           if (!ch.is_private) {
-            toast.info(`#${ch.name} channel was created`);
+            toast.info("#" + ch.name + " channel was created");
           }
           break;
         }
@@ -125,21 +137,16 @@ export function WSProvider({
           }
           break;
         }
-        case "message.updated": {
-          const { id, channel_id, content, edited_at } = event.payload;
-          useMessageStore
-            .getState()
-            .updateMessage(channel_id, { id, content, edited_at });
-          break;
-        }
-        case "message.deleted": {
-          const { id, channel_id } = event.payload;
-          useMessageStore.getState().removeMessage(channel_id, id);
-          break;
-        }
       }
     },
-    [addMessage, setTyping, clearTyping, workspaceId],
+    [
+      addMessage,
+      setTyping,
+      clearTyping,
+      updateMessage,
+      removeMessage,
+      workspaceId,
+    ],
   );
 
   const connect = useCallback(() => {
@@ -150,7 +157,7 @@ export function WSProvider({
     if (!token || !workspaceId) return;
 
     isConnecting.current = true;
-    const url = `${WS_BASE}/ws?token=${token}&workspace_id=${workspaceId}`;
+    const url = WS_BASE + "/ws?token=" + token + "&workspace_id=" + workspaceId;
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
@@ -158,7 +165,6 @@ export function WSProvider({
       isConnecting.current = false;
       reconnectDelay.current = 1000;
       setConnected(true);
-      // Rejoin all subscribed channels after reconnect
       subscribedChannels.current.forEach((channelId) => {
         ws.send(
           JSON.stringify({
@@ -167,7 +173,7 @@ export function WSProvider({
           }),
         );
       });
-      // Also subscribe to the workspace itself for channel.created events
+      // Subscribe to workspace-level events (channel.created)
       ws.send(
         JSON.stringify({
           type: "channel.join",

@@ -31,13 +31,19 @@ export const messageApi = {
     api.get<MessageListResponse>(
       `/channels/${channelId}/messages${before ? `?before=${before}` : ""}`,
     ),
+
   getThread: (messageId: string) =>
     api.get<{ parent_id: string; data: Message[]; count: number }>(
       `/messages/${messageId}/thread`,
     ),
+
   edit: (id: string, content: string) =>
     api.patch<Message>(`/messages/${id}`, { content }),
-  delete: (id: string) => api.delete(`/messages/${id}`),
+
+  // Pass channel_id as query param so backend can broadcast the delete event
+  delete: (id: string, channelId: string) =>
+    api.delete(`/messages/${id}?channel_id=${channelId}`),
+
   toggleReaction: (id: string, emoji: string, channel_id: string) =>
     api.post<{ message_id: string; reactions: ReactionSummary[] }>(
       `/messages/${id}/reactions`,
